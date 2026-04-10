@@ -2,6 +2,7 @@ import {
   generateKeyPair, loadImageFile, loadAudioFile, rgbToBlob, multiply,
   textToRGB, rgbToText, rgbToRawText, audioToRGB, rgbToAudio, toWavBlob,
 } from './steno.js';
+import { extractFromPhoto } from './extract.js';
 
 const $ = s => document.querySelector(s);
 const tick = () => new Promise(r => setTimeout(r, 10));
@@ -20,11 +21,14 @@ const keyHint    = $('#key-hint');
 const btnToImg   = $('#btn-to-img');
 const btnFromImg = $('#btn-from-img');
 const btnMul     = $('#btn-multiply');
+const btnExtract = $('#btn-extract');
 const btnKeygen  = $('#btn-keygen');
 const statusEl   = $('#status');
 const output     = $('#output');
 const previewCv  = $('#preview');
 const outImage   = $('#out-image');
+const outExtract = $('#out-extract');
+const extractCv  = $('#extract-preview');
 const outText    = $('#out-text');
 const outAudio   = $('#out-audio');
 const dlImg      = $('#dl-img');
@@ -37,6 +41,7 @@ const audioEl    = $('#audio-player');
 
 let fileRGB = null;
 let keyRGB  = null;
+let rawSourceImg = null; // original Image element for extract
 
 function setStatus(msg, type = '') {
   statusEl.textContent = msg;
@@ -46,6 +51,7 @@ function setStatus(msg, type = '') {
 function clearOutput() {
   output.classList.add('hidden');
   outImage.classList.add('hidden');
+  outExtract.classList.add('hidden');
   outText.classList.add('hidden');
   outAudio.classList.add('hidden');
 }
@@ -105,6 +111,8 @@ async function onFile(file) {
     if (type === 'image') {
       setStatus('Loading image...', '');
       fileRGB = await loadImageFile(file);
+      // Keep original image for extract
+      rawSourceImg = await loadRawImage(file);
     } else if (type === 'audio') {
       setStatus('Decoding audio...', '');
       const samples = await loadAudioFile(file);
@@ -226,11 +234,50 @@ async function doKeygen() {
   setStatus('Key pair → 2 PNGs downloaded', 'ok');
 }
 
+/** Load file as an Image element (full resolution, for extract) */
+function loadRawImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Cannot load image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/** Extract: find stenograph square in raw photo → 1024×1024 */
+async function doExtract() {
+  clearOutput();
+  if (!rawSourceImg) { setStatus('Drop a photo first', 'err'); return; }
+
+  try {
+    setStatus('Extracting...', '');
+    await tick();
+
+    const { rgb, preview } = extractFromPhoto(rawSourceImg);
+
+    // Show detection preview
+    extractCv.width = preview.width;
+    extractCv.height = preview.height;
+    extractCv.getContext('2d').drawImage(preview, 0, 0);
+    outExtract.classList.remove('hidden');
+    output.classList.remove('hidden');
+
+    // Replace fileRGB with extracted result
+    fileRGB = rgb;
+    await showRGB(rgb, 'extracted.png');
+    setStatus('Extract: found and corrected → 1024×1024', 'ok');
+  } catch (e) {
+    setStatus(`Extract error: ${e.message}`, 'err');
+    console.error(e);
+  }
+}
+
 // ─── Events ─────────────────────────────────────────────────────────────────
 
 btnToImg.onclick = doToImage;
 btnFromImg.onclick = doFromImage;
 btnMul.onclick = doMultiply;
+btnExtract.onclick = doExtract;
 btnKeygen.onclick = doKeygen;
 
 function setupDrop(zone, input, handler) {

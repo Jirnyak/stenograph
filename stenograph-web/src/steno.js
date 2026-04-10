@@ -438,24 +438,20 @@ export function rgbToRawText(rgb) {
   return s;
 }
 
-// ─── Audio ↔ Image (16-bit PCM + spatial interleaving) ──────────────────────
-
-/** Median of 3 */
-function med3(a, b, c) {
-  return a <= b ? (b <= c ? b : (a <= c ? c : a)) : (a <= c ? a : (b <= c ? c : b));
-}
+// ─── Audio ↔ Image (16-bit PCM + robust binary header) ──────────────────────
 
 /**
  * Audio → 1024×1024 RGB.
- * 16-bit linear PCM, spatially interleaved across all bytes.
- * Header (8 bytes) tripled at positions 0-23 for robustness.
- * Capacity: ~1,572,852 samples = ~71.3s at 22050 Hz.
- * Quality: 96dB SNR (16-bit linear vs 38dB for μ-law).
+ * Header: 64 bits (origLen + storedLen), each bit stored 9× as binary 0/255.
+ *   Copies interleaved across 3 bands (top/middle/bottom of image)
+ *   → survives JPEG, resize, partial crop.
+ * Data: 16-bit PCM, spatially interleaved from byte 576 onwards.
+ * Capacity: ~1,572,576 samples = ~71.3s at 22050 Hz. 96dB SNR.
  */
 export function audioToRGB(samples, sr = 22050) {
   const origLen = samples.length;
-  const HEADER = 24;
-  const dataZone = T - HEADER;
+  const HDR = 576;
+  const dataZone = T - HDR;
   const maxSamples = dataZone >> 1;
   let data;
 
@@ -470,19 +466,16 @@ export function audioToRGB(samples, sr = 22050) {
     }
   }
 
-  // Normalize to [-1, 1] → scale to int16 range
   let peak = 0;
   for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
   const scale = peak > 1e-10 ? 32767 / peak : 1;
 
-  // Build header: [origLen:4][storedLen:4]
   const stored = data.length;
   const hdr = new Uint8Array(8);
   const hdv = new DataView(hdr.buffer);
   hdv.setUint32(0, origLen, true);
   hdv.setUint32(4, stored, true);
 
-  // Build sample payload: int16 LE
   const sampleBytes = new Uint8Array(stored * 2);
   const sdv = new DataView(sampleBytes.buffer);
   for (let i = 0; i < stored; i++)
@@ -491,29 +484,39 @@ export function audioToRGB(samples, sr = 22050) {
   const rgb = new Uint8Array(T);
   rgb.fill(128);
 
-  // Header: 3 copies in first 24 bytes
-  for (let c = 0; c < 3; c++)
-    for (let i = 0; i < 8; i++) rgb[c * 8 + i] = hdr[i];
-
-  // Interleave sample data across data zone
+  // Data: interleaved from byte 576 onwards
   for (let i = 0; i < sampleBytes.length; i++)
-    rgb[HEADER + ((i * S1) % dataZone)] = sampleBytes[i];
+    rgb[HDR + ((i * S1) % dataZone)] = sampleBytes[i];
+
+  // Header LAST: 64 bits × 9 copies, binary 0/255
+  // 3 bands (top/mid/bottom) × 3 copies per band = 9 total
+  for (let i = 0; i < 64; i++) {
+    const v = ((hdr[i >> 3] >> (7 - (i & 7))) & 1) * 255;
+    for (let band = 0; band < 3; band++)
+      for (let c = 0; c < 3; c++)
+        rgb[band * PIX + i + c * 64] = v;
+  }
 
   return rgb;
 }
 
 /**
- * Image → audio. 16-bit PCM, de-interleaved.
- * Header from median of 3 copies. Always works on any image.
+ * Image → audio. Binary header (9× majority vote), 16-bit PCM.
+ * Always works on any image.
  */
 export function rgbToAudio(rgb) {
-  const HEADER = 24;
-  const dataZone = T - HEADER;
+  const HDR = 576;
+  const dataZone = T - HDR;
 
-  // Header: median of 3 copies
+  // Header: 9 copies per bit → majority vote (≥5/9)
   const hdr = new Uint8Array(8);
-  for (let i = 0; i < 8; i++)
-    hdr[i] = med3(rgb[i], rgb[8 + i], rgb[16 + i]);
+  for (let i = 0; i < 64; i++) {
+    let votes = 0;
+    for (let band = 0; band < 3; band++)
+      for (let c = 0; c < 3; c++)
+        if (rgb[band * PIX + i + c * 64] > 128) votes++;
+    if (votes >= 5) hdr[i >> 3] |= (1 << (7 - (i & 7)));
+  }
 
   const hdv = new DataView(hdr.buffer);
   const origLen = hdv.getUint32(0, true);
@@ -522,18 +525,15 @@ export function rgbToAudio(rgb) {
   const maxSamples = dataZone >> 1;
   const count = (storedLen > 0 && storedLen <= maxSamples) ? storedLen : maxSamples;
 
-  // De-interleave bytes
   const sampleBytes = new Uint8Array(count * 2);
   for (let i = 0; i < sampleBytes.length; i++)
-    sampleBytes[i] = rgb[HEADER + ((i * S1) % dataZone)];
+    sampleBytes[i] = rgb[HDR + ((i * S1) % dataZone)];
 
-  // Decode int16 LE → float [-1, 1]
   const sdv = new DataView(sampleBytes.buffer);
   const decoded = new Float64Array(count);
   for (let i = 0; i < count; i++)
     decoded[i] = sdv.getInt16(i * 2, true) / 32768;
 
-  // Resample to original length if needed
   const maxOrig = 22050 * 600;
   let out;
   if (origLen > 0 && origLen <= maxOrig && origLen !== count) {

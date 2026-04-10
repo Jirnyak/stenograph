@@ -30,12 +30,17 @@
     <button id="btn-to-img">→ Image</button>
     <button id="btn-from-img">← Image</button>
     <button id="btn-multiply">× Key</button>
+    <button id="btn-extract">Extract</button>
     <button id="btn-keygen">Key Gen</button>
   </div>
 
   <div id="status" class="status"></div>
 
   <div id="output" class="hidden">
+    <div id="out-extract" class="panel hidden">
+      <h3>Detected region</h3>
+      <canvas id="extract-preview" width="1024" height="1024"></canvas>
+    </div>
     <div id="out-image" class="panel hidden">
       <h3>Image</h3>
       <canvas id="preview" width="1024" height="1024"></canvas>
