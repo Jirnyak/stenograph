@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stenograph</title>
+  <link rel="stylesheet" href="src/style.css" />
+</head>
+<body>
+  <h1>Stenograph</h1>
+
+  <div class="zones">
+    <label class="zone" id="drop-file">
+      <span class="zone-icon">📁</span>
+      <span id="file-label">Drop file</span>
+      <span id="file-hint" class="hint">image / audio / text</span>
+      <input type="file" id="file-input" hidden />
+    </label>
+    <label class="zone" id="drop-key">
+      <span class="zone-icon">🔑</span>
+      <span id="key-label">Drop key</span>
+      <span id="key-hint" class="hint">PNG image</span>
+      <input type="file" id="key-input" accept="image/png" hidden />
+    </label>
+  </div>
+
+  <textarea id="text-input" rows="3" placeholder="or type text here (Ctrl+Enter = encode)"></textarea>
+
+  <div class="actions">
+    <button id="btn-to-img">→ Image</button>
+    <button id="btn-from-img">← Image</button>
+    <button id="btn-multiply">× Key</button>
+    <button id="btn-keygen">Key Gen</button>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <div id="output" class="hidden">
+    <div id="out-image" class="panel hidden">
+      <h3>Image</h3>
+      <canvas id="preview" width="1024" height="1024"></canvas>
+      <a id="dl-img" download="stenograph.png">Download PNG</a>
+    </div>
+    <div id="out-text" class="panel hidden">
+      <h3>Text</h3>
+      <pre id="text-content"></pre>
+      <a id="dl-txt" download="decoded.txt">Download TXT</a>
+    </div>
+    <div id="out-audio" class="panel hidden">
+      <h3>Audio</h3>
+      <audio id="audio-player" controls></audio>
+      <a id="dl-wav" download="decoded.wav">Download WAV</a>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
