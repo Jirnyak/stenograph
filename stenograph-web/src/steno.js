@@ -7,7 +7,6 @@
  */
 
 const N = 1024;
-const MOD = 251;
 const T = N * N * 3;          // 3,145,728 total bytes
 const PIX = N * N;            // 1,048,576 pixels (= bytes per channel)
 
@@ -131,7 +130,7 @@ void main(){
   int s=0;
   for(int k=0;k<1024;k++)
     s+=texelFetch(uA,ivec2(k,pos.y),0).r*texelFetch(uB,ivec2(k,pos.x),0).r;
-  C=ivec4(s-(s/251)*251,0,0,0);
+  C=ivec4(s,0,0,0);
 }`);
     gl.compileShader(fs);
     if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) return null;
@@ -154,7 +153,7 @@ void main(){
   } catch (e) { return null; }
 }
 
-function gpuMulMod(A, B, n) {
+function gpuMul(A, B, n) {
   const g = initGPU();
   if (!g) return null;
   const { gl, pr, vao, uA, uB } = g;
@@ -218,7 +217,7 @@ function gpuMulMod(A, B, n) {
 
 // ─── CPU Matrix Multiply (fallback) ─────────────────────────────────────────
 
-function cpuMulMod(A, B, n, p) {
+function cpuMul(A, B, n) {
   const BT = new Int32Array(n * n);
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) BT[j * n + i] = B[i * n + j];
   const C = new Int32Array(n * n);
@@ -228,93 +227,107 @@ function cpuMulMod(A, B, n, p) {
       const bj = j * n;
       let s = 0;
       for (let k = 0; k < n; k++) s += A[ai + k] * BT[bj + k];
-      C[ai + j] = ((s % p) + p) % p;
+      C[ai + j] = s;
     }
   }
   return C;
 }
 
-/** C = A × B mod MOD. Tries GPU first, falls back to CPU. */
-function matMulMod(A, B, n, p) {
-  const gpu = gpuMulMod(A, B, n);
+/** C = A × B (raw integer). Tries GPU first, falls back to CPU. */
+function matMul(A, B, n) {
+  const gpu = gpuMul(A, B, n);
   if (gpu) return gpu;
-  return cpuMulMod(A, B, n, p);
+  return cpuMul(A, B, n);
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Hadamard key generation (orthogonal, binary ±1) ────────────────────────
 
-function channelToMod(rgb, ch) {
-  const M = new Int32Array(N * N);
-  for (let i = 0; i < N * N; i++) M[i] = rgb[i * 3 + ch] % MOD;
-  return M;
+/** Build Sylvester Hadamard matrix H_n, entries ±1, H×Hᵀ = n×I */
+function buildHadamard(n) {
+  const H = new Int8Array(n * n);
+  H[0] = 1;
+  for (let half = 1; half < n; half *= 2)
+    for (let i = 0; i < half; i++)
+      for (let j = 0; j < half; j++) {
+        const v = H[i * n + j];
+        H[i * n + half + j] = v;
+        H[(half + i) * n + j] = v;
+        H[(half + i) * n + half + j] = -v;
+      }
+  return H;
 }
 
-function modToChannel(M, rgb, ch) {
-  for (let i = 0; i < N * N; i++) rgb[i * 3 + ch] = M[i];
+function fisherYates(n) {
+  const a = new Uint32Array(n);
+  for (let i = 0; i < n; i++) a[i] = i;
+  const r = new Uint32Array(n);
+  crypto.getRandomValues(r);
+  for (let i = n - 1; i > 0; i--) {
+    const j = r[i] % (i + 1);
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
 }
-
-// ─── Key generation (elementary operations — O(n²), no inversion) ───────────
 
 /**
- * Generate key pair: K and K⁻¹ mod 251.
- * Built from random elementary row operations on identity.
- * K × K⁻¹ ≡ I (mod 251). Both are 1024×1024 noise images.
+ * Generate key pair: K and Kᵀ (randomized Hadamard).
+ * K/√n is orthogonal → K × Kᵀ = n × I.
+ * Keys stored as binary 0/255 → survive any JPEG compression.
+ * Independent matrix per RGB channel for maximum diffusion.
  */
 export function generateKeyPair() {
+  const H = buildHadamard(N);
   const enc = new Uint8Array(N * N * 3);
   const dec = new Uint8Array(N * N * 3);
 
   for (let ch = 0; ch < 3; ch++) {
-    const K    = new Int32Array(N * N);
-    const Kinv = new Int32Array(N * N);
-    for (let i = 0; i < N; i++) { K[i * N + i] = 1; Kinv[i * N + i] = 1; }
+    const rp = fisherYates(N), cp = fisherYates(N);
+    const sb = new Uint8Array(N * 2);
+    crypto.getRandomValues(sb);
 
-    const numOps = N * 16;
-    const rowNoise = new Uint16Array(numOps * 2);
-    const scNoise  = new Uint8Array(numOps);
-    crypto.getRandomValues(rowNoise);
-    crypto.getRandomValues(scNoise);
-
-    for (let op = 0; op < numOps; op++) {
-      const i = rowNoise[op * 2] % N;
-      let j = rowNoise[op * 2 + 1] % (N - 1);
-      if (j >= i) j++;
-      const c = (scNoise[op] % (MOD - 1)) + 1;
-
-      // K: row_i += c * row_j (mod MOD)
-      const ri = i * N, rj = j * N;
-      for (let col = 0; col < N; col++)
-        K[ri + col] = (K[ri + col] + c * K[rj + col]) % MOD;
-
-      // Kinv: col_j -= c * col_i  ≡  col_j += (MOD-c) * col_i (mod MOD)
-      const mc = MOD - c;
-      for (let row = 0; row < N; row++) {
-        const base = row * N;
-        Kinv[base + j] = (Kinv[base + j] + mc * Kinv[base + i]) % MOD;
+    for (let i = 0; i < N; i++) {
+      const rs = (sb[i] & 1) * 2 - 1;
+      for (let j = 0; j < N; j++) {
+        const cs = (sb[N + j] & 1) * 2 - 1;
+        const v = rs * cs * H[rp[i] * N + cp[j]];
+        const px = v > 0 ? 255 : 0;
+        enc[(i * N + j) * 3 + ch] = px;
+        dec[(j * N + i) * 3 + ch] = px;
       }
     }
-
-    modToChannel(K, enc, ch);
-    modToChannel(Kinv, dec, ch);
   }
 
   return { encrypt: enc, decrypt: dec };
 }
 
-// ─── Matrix multiply ────────────────────────────────────────────────────────
+// ─── Matrix multiply (float, orthogonal, compression-resilient) ─────────────
 
 /**
  * image × key. Both are 1024×1024 RGB images.
- * Per-channel: Y = X × K (mod 251). That's it.
+ * Key interpreted as binary ±1 (threshold 128). Image centred at 128.
+ * Y = K × (X − 128) / √n + 128.
+ * Orthogonal keys don't amplify errors → survives JPEG, resize, etc.
+ * ~8% clipping at extremes for high-variance images — acceptable trade.
  */
 export function multiply(imageRGB, keyRGB) {
   const out = new Uint8Array(N * N * 3);
+  const scale = 1.0 / Math.sqrt(N);
+
   for (let ch = 0; ch < 3; ch++) {
-    const X = channelToMod(imageRGB, ch);
-    const K = channelToMod(keyRGB, ch);
-    const Y = matMulMod(X, K, N, MOD);
-    modToChannel(Y, out, ch);
+    const K = new Int32Array(N * N);
+    for (let i = 0; i < N * N; i++)
+      K[i] = keyRGB[i * 3 + ch] > 128 ? 1 : -1;
+
+    const X = new Int32Array(N * N);
+    for (let i = 0; i < N * N; i++)
+      X[i] = imageRGB[i * 3 + ch] - 128;
+
+    const Y = matMul(K, X, N);
+
+    for (let i = 0; i < N * N; i++)
+      out[i * 3 + ch] = Math.max(0, Math.min(255, Math.round(Y[i] * scale + 128)));
   }
+
   return out;
 }
 
@@ -568,4 +581,4 @@ export function toWavBlob(samples, sr) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 
-export { N, MOD };
+export { N };
