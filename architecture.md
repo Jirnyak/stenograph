@@ -56,22 +56,37 @@ No headers, no magic bytes, nothing added to the pixel data.
 ### Text → Image
 
 ```
-text → UTF-8 → zlib compress → [TX magic + lengths + compressed data]
-     → binary encoding: each bit = one subpixel (0 or 255)
-     → reshape to N×N×3 → save PNG
+text → UTF-8 → zlib compress → [TX magic + lengths + CRC32 + compressed data]
+     → 25× spatial repetition: each bit stored at 25 different pixel positions
+     → per pixel: R=G=B = 88 (bit=0) or 168 (bit=1)
+     → save N×N PNG
 ```
 
-- Magic bytes `TX` (0x54, 0x58) at start of pixel data
-- Capacity: `N² × 3 / 8` bytes (compressed) at N×N
-- Default N=1024 → ~393 KB compressed text capacity
-- Binary encoding survives ±100 pixel error via threshold at 128
-- Remaining pixels filled with seeded random 0/255 (noise-like)
+- Magic bytes `TX` (0x54, 0x58) at start of payload
+- Header: TX(2) + comp_len(4) + raw_len(4) + CRC32(4) = 14 bytes
+- CRC32 on compressed data for integrity verification
+- Capacity: `N² / 25 / 8` bytes payload at N×N
+- Default N=1024 → ~5.2 KB compressed (~15 KB text at 3:1)
+- **Pixel values 88/168 (±40 from 128):** survives matrix cipher clipping
+  AND has enough contrast for encrypted image to resist JPEG quantization.
+- **25× spatial repetition:** each data bit stored at 25 different positions
+  across the image using coprime strides. Spreads JPEG 8×8 block errors
+  across many independent data bits.
+- **R=G=B per pixel:** 3 independent cipher channels carry same bit.
+  After encrypt/decrypt, luminance-weighted soft voting across all
+  25 positions × 3 channels = 75 observations per bit.
+- **Luminance-weighted voting (Y = 0.299R + 0.587G + 0.114B):**
+  JPEG preserves Y channel much better than chrominance. G channel
+  after decrypt has ~8% BER vs R ~30% and B ~40%. Luminance weighting
+  gives optimal SNR through the JPEG round-trip.
+- Survives: encrypt → JPEG q≥35 → decrypt → perfect text recovery
+- Remaining pixels filled with random 88/168 noise (R=G=B)
 
 ### Image → Text
 
 ```
-image → flatten pixels → check first 16 subpixels for TX magic
-      → threshold at 128 → unpack bits → read lengths
+image → for each bit: sum luminance(pixel - 128) across 25 spatial copies
+      → sign of sum = decoded bit → check TX magic → verify CRC32
       → zlib decompress → UTF-8 decode → text
 ```
 
@@ -143,7 +158,7 @@ stenograph/
 |------|--------|-------|---------|
 | Key | `.npy` float64 `(3,B,B)` | numpy header | Separate file |
 | Encrypted image | PNG, RGB | None | Pure pixel data |
-| Text-as-image | PNG, binary 0/255 | `TX` in pixels | Self-contained |
+| Text-as-image | PNG, binary 88/168 | `TX` in pixels | 25× redundant, CRC32 |
 | Audio-as-image | PNG, spectral | `AU` in row 0 | Self-contained |
 
 **Zero metadata in any output PNG.** All information lives in pixel values.

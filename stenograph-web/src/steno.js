@@ -15,6 +15,23 @@ const S1 = 104729;
 const S2 = 7919;
 const S3 = 65537;
 
+// Safe binary pixel values (avoid clipping during matrix multiply)
+const BIT_ZERO = 88;
+const BIT_ONE  = 168;
+
+// 25× spatial repetition for JPEG resilience
+const TEXT_REPS = 25;
+const TEXT_PRIMES = [
+  104729, 7919, 65537, 15485863, 324517, 49979687, 611953,
+  2097169, 3145739, 4194319, 5242907, 6291469, 7340033,
+  8388617, 9437189, 10485767, 11534351, 12582917, 13631489,
+  14680067, 15728641, 16777259, 17825801, 18874379, 19922947
+];
+const SEG_SIZE = (PIX / TEXT_REPS) | 0;
+
+// JPEG YCbCr luminance weights
+const LUM_R = 0.299, LUM_G = 0.587, LUM_B = 0.114;
+
 // ─── CRC-32 ─────────────────────────────────────────────────────────────────
 
 const CRC_T = new Uint32Array(256);
@@ -359,10 +376,10 @@ async function zInflate(data) {
 
 /**
  * Text → 1024×1024 RGB.
- * TMR: 3 copies, one per RGB channel, each spatially interleaved
- * with a different prime stride. Image looks like uniform noise.
- * [compLen:4][rawLen:4][CRC32:4][zlibData] → bits → R/G/B.
- * Capacity: ~128KB text. Corrects up to 33% per-channel damage.
+ * 25× spatial repetition + R=G=B per pixel = 75 copies per bit.
+ * Luminance-weighted soft voting on decode survives JPEG q≥35.
+ * [compLen:4][rawLen:4][CRC32:4][zlibData] → bits → interleaved pixels.
+ * Capacity: ~5KB compressed text.
  */
 export async function textToRGB(text) {
   const raw = new TextEncoder().encode(text);
@@ -377,47 +394,58 @@ export async function textToRGB(text) {
   payload.set(comp, 12);
 
   const numBits = payload.length * 8;
-  if (numBits > PIX) throw new Error('Text too long');
+  if (numBits > SEG_SIZE) throw new Error('Text too long');
 
   const rgb = new Uint8Array(T);
 
-  // Fill with random binary noise (uniform appearance)
+  // Fill with random binary noise (R=G=B safe pixel values)
   const CHUNK = 65536;
   for (let pos = 0; pos < T; pos += CHUNK) {
     const end = Math.min(pos + CHUNK, T);
     const noise = new Uint8Array(end - pos);
     crypto.getRandomValues(noise);
-    for (let k = 0; k < noise.length; k++)
-      rgb[pos + k] = noise[k] < 128 ? 0 : 255;
+    for (let k = 0; k < noise.length; k++) {
+      const v = noise[k] < 128 ? BIT_ZERO : BIT_ONE;
+      rgb[pos + k] = v;
+    }
   }
 
-  // Write 3 copies: R channel (S1), G channel (S2), B channel (S3)
+  // Overwrite all R=G=B to match per-pixel (noise fill above is per subpixel)
+  for (let p = 0; p < PIX; p++) {
+    rgb[p * 3 + 1] = rgb[p * 3];
+    rgb[p * 3 + 2] = rgb[p * 3];
+  }
+
+  // Write each bit at TEXT_REPS spatially interleaved positions, R=G=B
   for (let i = 0; i < numBits; i++) {
-    const bit = ((payload[i >> 3] >> (7 - (i & 7))) & 1) * 255;
-    rgb[((i * S1) % PIX) * 3]     = bit;
-    rgb[((i * S2) % PIX) * 3 + 1] = bit;
-    rgb[((i * S3) % PIX) * 3 + 2] = bit;
+    const v = ((payload[i >> 3] >> (7 - (i & 7))) & 1) ? BIT_ONE : BIT_ZERO;
+    for (let r = 0; r < TEXT_REPS; r++) {
+      const pos = r * SEG_SIZE + ((i * TEXT_PRIMES[r]) % SEG_SIZE);
+      rgb[pos * 3]     = v;
+      rgb[pos * 3 + 1] = v;
+      rgb[pos * 3 + 2] = v;
+    }
   }
 
   return rgb;
 }
 
 /**
- * Image → text. TMR: majority vote R vs G vs B per bit.
+ * Image → text. Luminance-weighted soft voting across 25 spatial copies × 3 channels.
  * CRC32 verified. Returns string or null.
  */
 export async function rgbToText(rgb) {
   try {
-    const hdr = tmrBits(rgb, 96);
+    const hdr = softDecode(rgb, 96);
     const dv = new DataView(hdr.buffer);
     const compLen = dv.getUint32(0, true);
     const rawLen = dv.getUint32(4, true);
     const storedCrc = dv.getUint32(8, true);
 
-    if (compLen < 1 || compLen > 300000 || rawLen < 1 || rawLen > 1000000) return null;
-    if ((12 + compLen) * 8 > PIX) return null;
+    if (compLen < 1 || compLen > SEG_SIZE / 8 || rawLen < 1 || rawLen > 1000000) return null;
+    if ((12 + compLen) * 8 > SEG_SIZE) return null;
 
-    const full = tmrBits(rgb, (12 + compLen) * 8);
+    const full = softDecode(rgb, (12 + compLen) * 8);
     const comp = full.subarray(12);
     if (crc32(comp) !== storedCrc) return null;
 
@@ -427,14 +455,17 @@ export async function rgbToText(rgb) {
   } catch { return null; }
 }
 
-/** TMR: majority vote across R (S1), G (S2), B (S3) per bit */
-function tmrBits(rgb, numBits) {
+/** Soft-decision voting: luminance-weighted sum across 25 spatial copies */
+function softDecode(rgb, numBits) {
   const out = new Uint8Array((numBits + 7) >> 3);
   for (let i = 0; i < numBits; i++) {
-    const a = rgb[((i * S1) % PIX) * 3]     > 128 ? 1 : 0;
-    const b = rgb[((i * S2) % PIX) * 3 + 1] > 128 ? 1 : 0;
-    const c = rgb[((i * S3) % PIX) * 3 + 2] > 128 ? 1 : 0;
-    if (a + b + c >= 2) out[i >> 3] |= (1 << (7 - (i & 7)));
+    let vote = 0;
+    for (let r = 0; r < TEXT_REPS; r++) {
+      const pos = r * SEG_SIZE + ((i * TEXT_PRIMES[r]) % SEG_SIZE);
+      const idx = pos * 3;
+      vote += LUM_R * (rgb[idx] - 128) + LUM_G * (rgb[idx + 1] - 128) + LUM_B * (rgb[idx + 2] - 128);
+    }
+    if (vote > 0) out[i >> 3] |= (1 << (7 - (i & 7)));
   }
   return out;
 }

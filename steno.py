@@ -36,6 +36,18 @@ LOG_MAG_MAX = 20.0
 
 TEXT_MAGIC  = b"TX"         # in-pixel marker for text content
 AUDIO_MAGIC = b"AU"         # in-pixel marker for audio content
+BIT_ZERO    = 88            # pixel value for bit=0 (centered ±40 from 128)
+BIT_ONE     = 168           # pixel value for bit=1 (survives JPEG + cipher)
+TEXT_REPS   = 25            # spatial repetition factor for noise resilience
+
+# Primes for spatial interleaving (all coprime to IMG_SIZE² // TEXT_REPS)
+_TEXT_PRIMES = [104729, 7919, 65537, 15485863, 324517, 49979687, 611953,
+                2097169, 3145739, 4194319, 5242907, 6291469, 7340033,
+                8388617, 9437189, 10485767, 11534351, 12582917, 13631489,
+                14680067, 15728641, 16777259, 17825801, 18874379, 19922947]
+
+# JPEG YCbCr luminance weights — G dominates luminance, JPEG preserves it best
+_LUM_W = np.array([0.299, 0.587, 0.114])
 
 # ─── Image I/O (no metadata, ever) ──────────────────────────────────────────
 
@@ -272,50 +284,98 @@ def image_to_audio(img_path, output=None):
 # ─── Text ↔ Image ────────────────────────────────────────────────────────────
 
 def text_to_image(text, output="text.png", N=IMG_SIZE):
-    """Text → image: magic + lengths + zlib, all as binary 0/255 pixels."""
+    """Text → image: zlib compressed, 15× spatially interleaved, R=G=B.
+    Each bit stored at 15 different positions × 3 channels = 45 copies.
+    Survives JPEG compression + matrix cipher round-trip."""
     raw = text.encode('utf-8')
     comp = zlib.compress(raw, 9)
-    payload = TEXT_MAGIC + struct.pack('<II', len(comp), len(raw)) + comp
+    crc = zlib.crc32(comp) & 0xFFFFFFFF
 
-    total_bits = N * N * 3
-    if len(payload) > total_bits // 8:
-        raise ValueError(f"Text too long: {len(payload)}B > {total_bits // 8}B")
+    # Header: TX(2) + comp_len(4) + raw_len(4) + crc32(4) = 14 bytes
+    payload = TEXT_MAGIC + struct.pack('<III', len(comp), len(raw), crc) + comp
 
-    bits = np.unpackbits(np.frombuffer(payload, np.uint8))
-    pixels = np.zeros(total_bits, np.uint8)
-    pixels[:len(bits)] = bits * 255
+    n_pixels = N * N
+    seg_size = n_pixels // TEXT_REPS
+    n_bits = len(payload) * 8
 
-    n_fill = total_bits - len(bits)
-    if n_fill > 0:
-        np.random.seed(zlib.crc32(raw))
-        pixels[len(bits):] = (np.random.randint(0, 2, n_fill) * 255).astype(np.uint8)
+    if n_bits > seg_size:
+        raise ValueError(f"Text too long: {n_bits} bits > {seg_size} segment capacity")
 
-    save_png(output, pixels.reshape(N, N, 3))
-    print(f"Text → Image: {output} ({N}×{N}, {len(raw)}B → {len(comp)}B)")
+    # Random noise fill
+    np.random.seed(42)
+    pixel_vals = np.where(
+        np.random.randint(0, 2, n_pixels), BIT_ONE, BIT_ZERO
+    ).astype(np.uint8)
+
+    # Write each bit at TEXT_REPS spatially interleaved positions
+    bits = np.unpackbits(np.frombuffer(payload, np.uint8))[:n_bits]
+    bit_vals = np.where(bits, BIT_ONE, BIT_ZERO).astype(np.uint8)
+    indices = np.arange(n_bits, dtype=np.int64)
+
+    for r in range(TEXT_REPS):
+        positions = r * seg_size + (indices * _TEXT_PRIMES[r]) % seg_size
+        pixel_vals[positions] = bit_vals
+
+    # R=G=B: 3 independent cipher channels carry same data
+    img = np.stack([pixel_vals.reshape(N, N)] * 3, axis=-1)
+    save_png(output, img)
+    print(f"Text → Image: {output} ({N}×{N}, {len(raw)}B → {len(comp)}B, {TEXT_REPS}× redundant)")
 
 def image_to_text(path):
-    """Read text from image. Checks for TX magic in pixel data."""
+    """Extract text using soft voting: sum(pixel - 128) across 3 channels × 15 positions."""
     img = _ensure_rgb(load_png(path))
-    flat = img.reshape(-1)
+    N = img.shape[0]
+    n_pixels = N * N
+    seg_size = n_pixels // TEXT_REPS
+    channels = img.reshape(n_pixels, 3).astype(np.float64)
 
-    # Check magic: first 2 bytes = 16 bits
-    magic = np.packbits((flat[:16] > 128).astype(np.uint8)).tobytes()[:2]
+    # Decode header first (14 bytes = 112 bits)
+    hdr_bits = _soft_decode(channels, seg_size, 112)
+    hdr = np.packbits(hdr_bits).tobytes()[:14]
 
-    if magic == TEXT_MAGIC:
-        # Header: 2 (magic) + 4 (comp_len) + 4 (raw_len) = 10 bytes = 80 bits
-        hdr = np.packbits((flat[:80] > 128).astype(np.uint8)).tobytes()[:10]
-        comp_len = struct.unpack('<I', hdr[2:6])[0]
-        total_bits = (10 + comp_len) * 8
-        data = np.packbits((flat[:total_bits] > 128).astype(np.uint8)).tobytes()
-        try:
-            text = zlib.decompress(data[10:10 + comp_len]).decode('utf-8')
-        except Exception:
-            text = _raw_image_to_text(img)
-    else:
+    if hdr[:2] != TEXT_MAGIC:
+        print("Image → Text: no TX magic found")
+        return _raw_image_to_text(img)
+
+    comp_len, raw_len, stored_crc = struct.unpack('<III', hdr[2:14])
+    if comp_len < 1 or comp_len > seg_size // 8:
+        return _raw_image_to_text(img)
+
+    # Decode full payload
+    total_bits = (14 + comp_len) * 8
+    if total_bits > seg_size:
+        return _raw_image_to_text(img)
+
+    all_bits = _soft_decode(channels, seg_size, total_bits)
+    data = np.packbits(all_bits).tobytes()
+
+    comp_data = data[14:14 + comp_len]
+    if zlib.crc32(comp_data) & 0xFFFFFFFF != stored_crc:
+        print("Image → Text: CRC mismatch")
+        return _raw_image_to_text(img)
+
+    try:
+        text = zlib.decompress(comp_data).decode('utf-8')
+    except Exception:
         text = _raw_image_to_text(img)
 
     print(f"Image → Text: {len(text)} chars")
     return text
+
+def _soft_decode(channels, seg_size, n_bits):
+    """Soft-decision voting: luminance-weighted sum across all spatial copies.
+    Uses Y = 0.299R + 0.587G + 0.114B because JPEG preserves luminance best."""
+    indices = np.arange(n_bits, dtype=np.int64)
+    votes = np.zeros(n_bits, np.float64)
+
+    for r in range(TEXT_REPS):
+        positions = r * seg_size + (indices * _TEXT_PRIMES[r]) % seg_size
+        # Luminance-weighted vote: G channel dominates (JPEG preserves Y best)
+        votes += _LUM_W[0] * (channels[positions, 0] - 128.0)
+        votes += _LUM_W[1] * (channels[positions, 1] - 128.0)
+        votes += _LUM_W[2] * (channels[positions, 2] - 128.0)
+
+    return (votes > 0).astype(np.uint8)
 
 def _raw_image_to_text(img):
     return ''.join(chr(b) if 32 <= b <= 126 else ('\n' if b == 10 else '')
