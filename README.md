@@ -14,8 +14,10 @@ can recover useful output from those images without PNG metadata.
   - `PCM exact`: stores 16-bit PCM bytes for PNG-only round trips.
   - `Fourier robust`: stores a frequency image with phase vectors. The red
     channel is the drawable frequency map; green/blue preserve phase for audible
-    round trips. Span presets trade quality for duration: ~24s, ~60s, or ~3min.
-    Tracks longer than the selected span are fitted into it and expanded back.
+    round trips. A 0..500s span slider computes the Fourier grid; the default is
+    about one minute. Longer spans trade sample rate and time resolution for
+    duration. Tracks longer than the selected span are fitted into it and
+    expanded back.
 - Image -> cover image -> image, using low-bit image-in-image storage.
 - Photo extract: finds a photographed Stenograph square and rectifies it back to
   1024x1024.
@@ -88,5 +90,6 @@ current architecture is documented in `architecture.md`.
 - Keys are separate files and are not embedded in encrypted output.
 - Keep PNG for exact byte/image-in-image modes.
 - Use `Fourier robust` when the image should survive compression or be edited as
-  a frequency drawing. Use a longer Fourier span for full songs, or `PCM exact`
-  when PNG-only audio recovery matters more than editable image behavior.
+  a frequency drawing. Use a longer Fourier span for full songs; the image
+  stores its computed grid in pixels. Use `PCM exact` when PNG-only audio
+  recovery matters more than editable image behavior.

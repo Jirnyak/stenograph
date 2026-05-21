@@ -40,13 +40,9 @@
         <option value="fourier">Fourier robust</option>
       </select>
     </label>
-    <label>
-      Fourier span
-      <select id="fourier-span">
-        <option value="quality" selected>24s quality</option>
-        <option value="minute">60s balanced</option>
-        <option value="long">3min long</option>
-      </select>
+    <label class="range-option">
+      <span>Fourier span <output id="fourier-span-label">60.0s</output></span>
+      <input id="fourier-span" type="range" min="0" max="500" step="0.1" value="60" />
     </label>
     <label>
       Hide depth

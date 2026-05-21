@@ -3,10 +3,16 @@ const T = N * N * 3;
 const PIX = N * N;
 
 const SAMPLE_RATE = 22050;
-const FRAME = 1024;
-const HOP = 512;
 const FRAMES = 1024;
-const DEFAULT_PROFILE_ID = 'quality';
+const MIN_SAMPLE_RATE = 4000;
+const LONG_SAMPLE_RATE = 8000;
+const MIN_HOP = 128;
+const MAX_TARGET_SECONDS = 500;
+const DEFAULT_TARGET_SECONDS = 60;
+const SHORT_TARGET_SECONDS = 24;
+const SHORT_FRAME = 1024;
+const LONG_FRAME = 2048;
+const SAMPLE_RATE_TIERS = [SAMPLE_RATE, LONG_SAMPLE_RATE, MIN_SAMPLE_RATE];
 
 export const FOURIER_PROFILES = [
   { id: 'quality', name: '24s quality', sampleRate: 22050, frame: 1024, hop: 512 },
@@ -50,18 +56,67 @@ function makeHann(n) {
   return w;
 }
 
-function getProfile(profileId = DEFAULT_PROFILE_ID) {
-  const found = FOURIER_PROFILES.find(p => p.id === profileId);
-  return found || FOURIER_PROFILES[0];
-}
-
 function getSynthLen(profile) {
   return (FRAMES - 1) * profile.hop + profile.frame;
 }
 
-export function getFourierProfileSeconds(profileId = DEFAULT_PROFILE_ID) {
+function makeProfile(targetSeconds, sampleRate, frame, hop) {
+  const actualSeconds = getSynthLen({ frame, hop }) / sampleRate;
+  return {
+    id: `custom:${targetSeconds}`,
+    name: `${actualSeconds.toFixed(1)}s`,
+    sampleRate,
+    frame,
+    hop,
+    targetSeconds,
+    actualSeconds,
+  };
+}
+
+function hopForSeconds(seconds, sampleRate, frame) {
+  return Math.round((seconds * sampleRate - frame) / (FRAMES - 1));
+}
+
+function secondsFor(sampleRate, frame, hop) {
+  return getSynthLen({ frame, hop }) / sampleRate;
+}
+
+function computeProfile(targetSeconds = DEFAULT_TARGET_SECONDS) {
+  const requested = clamp(Number.isFinite(targetSeconds) ? targetSeconds : DEFAULT_TARGET_SECONDS, 0, MAX_TARGET_SECONDS);
+  const shortest = secondsFor(SAMPLE_RATE, SHORT_FRAME, MIN_HOP);
+  const target = Math.max(requested, shortest);
+  const frame = target <= SHORT_TARGET_SECONDS ? SHORT_FRAME : LONG_FRAME;
+
+  for (const sampleRate of SAMPLE_RATE_TIERS) {
+    const hop = hopForSeconds(target, sampleRate, frame);
+    if (hop >= MIN_HOP && hop <= frame) return makeProfile(requested, sampleRate, frame, hop);
+  }
+
+  return makeProfile(requested, MIN_SAMPLE_RATE, LONG_FRAME, LONG_FRAME);
+}
+
+function getProfile(profile = DEFAULT_TARGET_SECONDS) {
+  if (typeof profile === 'string') {
+    const found = FOURIER_PROFILES.find(p => p.id === profile);
+    if (found) return found;
+  }
+  const targetSeconds = Number(profile);
+  return computeProfile(targetSeconds);
+}
+
+export function getFourierProfileInfo(profileId = DEFAULT_TARGET_SECONDS) {
   const profile = getProfile(profileId);
-  return getSynthLen(profile) / profile.sampleRate;
+  return {
+    seconds: getSynthLen(profile) / profile.sampleRate,
+    sampleRate: profile.sampleRate,
+    frame: profile.frame,
+    hop: profile.hop,
+    name: profile.name,
+  };
+}
+
+export function getFourierProfileSeconds(profileId = DEFAULT_TARGET_SECONDS) {
+  return getFourierProfileInfo(profileId).seconds;
 }
 
 function getPlan(profile) {
@@ -248,7 +303,7 @@ function readHeader(rgb) {
   const sampleCount = dv.getUint32(8, true);
   const frame = dv.getUint16(12, true);
   const hop = dv.getUint16(14, true);
-  if (sampleRate < 8000 || sampleRate > 96000) return null;
+  if (sampleRate < MIN_SAMPLE_RATE || sampleRate > 96000) return null;
   if (frame < 512 || frame > 8192 || (frame & (frame - 1)) !== 0) return null;
   if (hop < 128 || hop > frame) return null;
   return { format: h[3], sampleRate, sampleCount, frame, hop };
@@ -365,7 +420,7 @@ function normalizeDecoded(samples) {
  * R carries log-frequency magnitude. G/B carry phase as cos/sin.
  * The header is redundant in pixels; no PNG metadata is used.
  */
-export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE, profileId = DEFAULT_PROFILE_ID) {
+export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE, profileId = DEFAULT_TARGET_SECONDS) {
   const profile = getProfile(profileId);
   const plan = getPlan(profile);
   const { data, sampleCount } = fitSamples(samples, sampleRate, profile);
@@ -427,7 +482,7 @@ export function fourierRGBToAudio(rgb) {
   const header = readHeader(rgb);
   const profile = header
     ? { sampleRate: header.sampleRate, frame: header.frame, hop: header.hop }
-    : getProfile(DEFAULT_PROFILE_ID);
+    : getProfile(DEFAULT_TARGET_SECONDS);
   const plan = getPlan(profile);
   const sampleRate = profile.sampleRate;
   const y0 = header ? HEADER_ROWS : 0;

@@ -3,7 +3,7 @@ import {
   textToRGB, rgbToText, rgbToRawText, audioToRGB, rgbToAudio, toWavBlob,
   hideImageInImage, revealImageFromImageInfo,
 } from './steno.js';
-import { audioToFourierRGB, fourierRGBToAudio, getFourierProfileSeconds, isFourierAudioRGB } from './audio-fourier.js';
+import { audioToFourierRGB, fourierRGBToAudio, getFourierProfileInfo, isFourierAudioRGB } from './audio-fourier.js';
 import { extractFromPhoto } from './extract.js';
 
 const $ = s => document.querySelector(s);
@@ -27,6 +27,7 @@ const coverHint  = $('#cover-hint');
 const hideBits   = $('#hide-bits');
 const audioMode  = $('#audio-mode');
 const fourierSpan = $('#fourier-span');
+const fourierSpanLabel = $('#fourier-span-label');
 const btnToImg   = $('#btn-to-img');
 const btnFromImg = $('#btn-from-img');
 const btnMul     = $('#btn-multiply');
@@ -151,18 +152,34 @@ function getAudioModeName() {
   return audioMode.value === 'fourier' ? 'Fourier' : 'PCM';
 }
 
+function getFourierSpanTarget() {
+  const n = Number(fourierSpan.value);
+  return Number.isFinite(n) ? n : 60;
+}
+
+function formatSeconds(seconds) {
+  return seconds >= 100 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
+
+function updateFourierSpanLabel() {
+  const info = getFourierProfileInfo(getFourierSpanTarget());
+  fourierSpanLabel.textContent = `${formatSeconds(info.seconds)} · ${info.sampleRate}Hz/${info.frame}/${info.hop}`;
+  return info;
+}
+
 async function encodeSourceAudio() {
   if (!sourceAudio) return;
   const fourier = audioMode.value === 'fourier';
-  const spanSeconds = getFourierProfileSeconds(fourierSpan.value);
+  const spanTarget = getFourierSpanTarget();
+  const spanInfo = updateFourierSpanLabel();
   setStatus(fourier ? 'Drawing Fourier audio...' : 'Encoding PCM audio...', '');
   await tick();
   fileRGB = fourier
-    ? audioToFourierRGB(sourceAudio.samples, sourceAudio.sampleRate, fourierSpan.value)
+    ? audioToFourierRGB(sourceAudio.samples, sourceAudio.sampleRate, spanTarget)
     : audioToRGB(sourceAudio.samples, sourceAudio.sampleRate);
   const seconds = sourceAudio.samples.length / sourceAudio.sampleRate;
-  fileHint.textContent = fourier && seconds > spanSeconds
-    ? `audio/fourier fit ${spanSeconds.toFixed(0)}s`
+  fileHint.textContent = fourier && seconds > spanInfo.seconds
+    ? `audio/fourier fit ${formatSeconds(spanInfo.seconds)}`
     : `audio/${audioMode.value} -> 1024x1024`;
 }
 
@@ -187,12 +204,17 @@ async function onFile(file) {
       fileRGB = await textToRGB(text);
     }
     fileLbl.textContent = file.name;
-    fileHint.textContent = `${type} -> 1024x1024`;
+    if (type !== 'audio') fileHint.textContent = `${type} -> 1024x1024`;
     dropFile.classList.add('loaded');
-    if (type === 'audio' && audioMode.value === 'fourier' && sourceAudio.samples.length / sourceAudio.sampleRate > getFourierProfileSeconds(fourierSpan.value))
-      setStatus(`Loaded: ${file.name} (${getAudioModeName()}, fit ${getFourierProfileSeconds(fourierSpan.value).toFixed(0)}s)`, 'ok');
-    else
+    if (type === 'audio' && audioMode.value === 'fourier') {
+      const spanInfo = updateFourierSpanLabel();
+      if (sourceAudio.samples.length / sourceAudio.sampleRate > spanInfo.seconds)
+        setStatus(`Loaded: ${file.name} (${getAudioModeName()}, fit ${formatSeconds(spanInfo.seconds)})`, 'ok');
+      else
+        setStatus(`Loaded: ${file.name} (${getAudioModeName()}, ${formatSeconds(spanInfo.seconds)} grid)`, 'ok');
+    } else {
       setStatus(type === 'audio' ? `Loaded: ${file.name} (${getAudioModeName()})` : `Loaded: ${file.name}`, 'ok');
+    }
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'err');
     console.error(e);
@@ -413,6 +435,7 @@ function setupDrop(zone, input, handler) {
 setupDrop(dropFile, fileInput, onFile);
 setupDrop(dropKey, keyInput, onKey);
 setupDrop(dropCover, coverInput, onCover);
+updateFourierSpanLabel();
 audioMode.addEventListener('change', async () => {
   if (!sourceAudio) return;
   try {
@@ -423,11 +446,15 @@ audioMode.addEventListener('change', async () => {
     console.error(e);
   }
 });
+fourierSpan.addEventListener('input', () => {
+  updateFourierSpanLabel();
+});
 fourierSpan.addEventListener('change', async () => {
   if (!sourceAudio || audioMode.value !== 'fourier') return;
   try {
     await encodeSourceAudio();
-    setStatus(`Fourier span: ${getFourierProfileSeconds(fourierSpan.value).toFixed(0)}s`, 'ok');
+    const spanInfo = updateFourierSpanLabel();
+    setStatus(`Fourier span: ${formatSeconds(spanInfo.seconds)}`, 'ok');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'err');
     console.error(e);

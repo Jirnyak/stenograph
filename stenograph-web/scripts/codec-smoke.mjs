@@ -1,6 +1,7 @@
 import {
   audioToFourierRGB,
   fourierRGBToAudio,
+  getFourierProfileInfo,
   getFourierProfileSeconds,
   isFourierAudioRGB,
 } from '../src/audio-fourier.js';
@@ -87,6 +88,15 @@ function checkPCM(name, samples) {
   console.log(`${name}: PCM corr=${c.toFixed(4)} peak=${peak(decoded.samples).toFixed(3)}`);
 }
 
+function checkSpan(target, sampleRate, frame, hop, seconds) {
+  const info = getFourierProfileInfo(target);
+  assert(info.sampleRate === sampleRate, `${target}s span sample rate ${info.sampleRate} != ${sampleRate}`);
+  assert(info.frame === frame, `${target}s span frame ${info.frame} != ${frame}`);
+  assert(info.hop === hop, `${target}s span hop ${info.hop} != ${hop}`);
+  assert(Math.abs(info.seconds - seconds) < 0.1, `${target}s span is ${info.seconds.toFixed(4)}s`);
+  console.log(`${target}s slider: ${info.seconds.toFixed(4)}s ${info.sampleRate}Hz/${info.frame}/${info.hop}`);
+}
+
 const sine = tone(440);
 const triad = chord();
 
@@ -105,16 +115,28 @@ console.log(`silent tail: max=${quietMax}`);
 
 assert(getFourierProfileSeconds('minute') > 55, 'minute Fourier profile is too short');
 assert(getFourierProfileSeconds('long') > 170, 'long Fourier profile is too short');
+checkSpan(0, 22050, 1024, 128, 5.9849);
+checkSpan(24, 22050, 1024, 516, 23.9860);
+checkSpan(60, 22050, 2048, 1291, 59.9883);
+checkSpan(180, 8000, 2048, 1406, 180.0483);
+checkSpan(500, 4000, 2048, 1953, 499.9918);
 
 const oneMinute = chord(60);
-const minuteDecoded = fourierRGBToAudio(audioToFourierRGB(oneMinute, SR, 'minute'));
+const minuteDecoded = fourierRGBToAudio(audioToFourierRGB(oneMinute, SR, 60));
 assert(minuteDecoded.samples.length === oneMinute.length, 'minute profile should preserve source duration');
 assert(corr(oneMinute, minuteDecoded.samples) >= 0.95, 'minute profile lost correlation');
 console.log(`minute span: ${minuteDecoded.samples.length} samples`);
 
 const threeMinutes = chord(180);
-const longDecoded = fourierRGBToAudio(audioToFourierRGB(threeMinutes, SR, 'long'));
+const longDecoded = fourierRGBToAudio(audioToFourierRGB(threeMinutes, SR, 180));
 assert(longDecoded.sampleRate === 8000, 'long profile should use compact sample rate');
 assert(Math.abs(longDecoded.samples.length / longDecoded.sampleRate - 180) < 0.1, 'long profile duration changed');
 assert(corr(resampleForTest(threeMinutes, longDecoded.samples.length), longDecoded.samples) >= 0.95, 'long profile lost correlation');
 console.log(`long span: ${longDecoded.samples.length} samples at ${longDecoded.sampleRate}Hz`);
+
+const fiveHundredGrid = chord(5);
+const fiveHundredDecoded = fourierRGBToAudio(audioToFourierRGB(fiveHundredGrid, SR, 500));
+assert(fiveHundredDecoded.sampleRate === 4000, '500s span should use low sample rate');
+assert(Math.abs(fiveHundredDecoded.samples.length / fiveHundredDecoded.sampleRate - 5) < 0.1, '500s span short source duration changed');
+assert(corr(resampleForTest(fiveHundredGrid, fiveHundredDecoded.samples.length), fiveHundredDecoded.samples) >= 0.90, '500s span lost correlation');
+console.log(`500s grid short source: ${fiveHundredDecoded.samples.length} samples at ${fiveHundredDecoded.sampleRate}Hz`);

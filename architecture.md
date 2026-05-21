@@ -110,7 +110,7 @@ audio → load/resample to 22050 Hz mono
 ### Audio → Fourier Image (Robust Mode)
 
 ```
-audio → load/resample to 22050 Hz mono → 1024 Hann-windowed frames
+audio → load/resample to the selected grid rate → 1024 Hann-windowed frames
       → FFT per frame → log-magnitude on a linear FFT-bin image grid
       → R = magnitude, G/B = phase as cos/sin
       → rows 0..3: redundant AF header in pixels
@@ -118,9 +118,11 @@ audio → load/resample to 22050 Hz mono → 1024 Hann-windowed frames
 ```
 
 - Alternative web mode selected as `Fourier robust`.
-- 1024 image columns are time frames. Span presets trade quality for duration:
-  1024/512 at 22050 Hz (~23.8s), 2048/1280 at 22050 Hz (~59.5s), or
-  2048/1408 at 8000 Hz (~180.4s).
+- 1024 image columns are time frames. The 0..500s span slider computes a
+  discrete grid and stores it in the `AF` header. Short spans use 1024-sample
+  FFT frames at 22050 Hz. Longer spans use 2048-sample frames and drop the
+  stored sample rate when needed: about 60s stays at 22050 Hz, about 180s uses
+  8000 Hz, and 500s uses about 4000 Hz.
 - Longer audio is fitted into the selected time grid and expanded back on decode.
   Choose a longer span to reduce this time-warping.
 - Magnitude uses a fixed `log1p` range. No per-file metadata is needed for scale.
