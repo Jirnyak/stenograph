@@ -7,6 +7,7 @@ const FRAME = 1024;
 const HOP = 512;
 const FRAMES = 1024;
 const SYNTH_LEN = (FRAMES - 1) * HOP + FRAME;
+export const FOURIER_MAX_SECONDS = SYNTH_LEN / SAMPLE_RATE;
 
 const HEADER_ROWS = 4;
 const HEADER_BYTES = 16;
@@ -18,8 +19,8 @@ const BIT_ZERO = 88;
 const BIT_ONE = 168;
 
 const MIN_FREQ = 40;
-const MAX_FREQ = 10000;
-const MAG_MAX = 6.0;
+const MAX_FREQ = 10900;
+const MAG_MAX = 8.0;
 const MAP_LO = 4;
 const MAP_SCALE = 247;
 const PHASE_CENTER = 128;
@@ -33,8 +34,9 @@ const LUM_G = 0.587;
 const LUM_B = 0.114;
 
 const window1024 = makeHann(FRAME);
-const imageBins = makeImageBinMap(N - HEADER_ROWS);
-const synthYs = makeSynthYMap(N - HEADER_ROWS);
+const logSynthYs = makeLogSynthYMap(N - HEADER_ROWS);
+const linearImageBins = makeLinearImageBinMap(N - HEADER_ROWS);
+const linearSynthYs = makeLinearSynthYMap(N - HEADER_ROWS);
 const synthPhases = makeInitialPhases();
 
 function clamp(n, lo, hi) {
@@ -63,29 +65,11 @@ function fitSamples(samples) {
     return out;
   }
 
-  for (let i = 0; i < SYNTH_LEN; i++) {
-    const p = i * (samples.length - 1) / (SYNTH_LEN - 1);
-    const lo = Math.floor(p);
-    const hi = Math.min(lo + 1, samples.length - 1);
-    out[i] = (samples[lo] + (samples[hi] - samples[lo]) * (p - lo)) * gain;
-  }
+  for (let i = 0; i < SYNTH_LEN; i++) out[i] = samples[i] * gain;
   return out;
 }
 
-function makeImageBinMap(rows) {
-  const map = new Array(rows);
-  const logRange = Math.log(MAX_FREQ / MIN_FREQ);
-  for (let y = 0; y < rows; y++) {
-    const t = 1 - y / (rows - 1);
-    const freq = MIN_FREQ * Math.exp(t * logRange);
-    const bin = clamp(freq * FRAME / SAMPLE_RATE, 1, FRAME / 2);
-    const lo = Math.floor(bin);
-    map[y] = { lo, hi: Math.min(lo + 1, FRAME / 2), f: bin - lo };
-  }
-  return map;
-}
-
-function makeSynthYMap(rows) {
+function makeLogSynthYMap(rows) {
   const map = new Float64Array(FRAME / 2 + 1);
   const logRange = Math.log(MAX_FREQ / MIN_FREQ);
   for (let k = 1; k <= FRAME / 2; k++) {
@@ -93,6 +77,24 @@ function makeSynthYMap(rows) {
     const t = Math.log(clamp(freq, MIN_FREQ, MAX_FREQ) / MIN_FREQ) / logRange;
     map[k] = (1 - t) * (rows - 1);
   }
+  return map;
+}
+
+function makeLinearImageBinMap(rows) {
+  const map = new Array(rows);
+  const maxBin = FRAME / 2;
+  for (let y = 0; y < rows; y++) {
+    const bin = (1 - y / (rows - 1)) * maxBin;
+    const lo = Math.floor(bin);
+    map[y] = { lo, hi: Math.min(lo + 1, maxBin), f: bin - lo };
+  }
+  return map;
+}
+
+function makeLinearSynthYMap(rows) {
+  const map = new Float64Array(FRAME / 2 + 1);
+  const maxBin = FRAME / 2;
+  for (let k = 0; k <= maxBin; k++) map[k] = (1 - k / maxBin) * (rows - 1);
   return map;
 }
 
@@ -163,7 +165,7 @@ function makeHeader(sampleRate, sampleCount) {
   h[0] = 0x41; // A
   h[1] = 0x46; // F
   h[2] = 1;
-  h[3] = 2; // log-magnitude + phase-vector format
+  h[3] = 3; // linear FFT bins + phase-vector format
   const dv = new DataView(h.buffer);
   dv.setUint32(4, sampleRate >>> 0, true);
   dv.setUint32(8, sampleCount >>> 0, true);
@@ -290,37 +292,26 @@ function normalizeDecoded(samples) {
   for (let i = 0; i < samples.length; i++) mean += samples[i];
   mean /= samples.length;
 
+  const fade = Math.min(EDGE_FADE, samples.length >> 3);
+  for (let i = 0; i < samples.length; i++) {
+    let v = samples[i] - mean;
+    if (fade > 0) {
+      const edge = Math.min(i + 1, samples.length - i);
+      if (edge < fade) v *= edge / fade;
+    }
+    samples[i] = v;
+  }
+
   let peak = 0;
   for (let i = 0; i < samples.length; i++) {
-    samples[i] -= mean;
     const v = Math.abs(samples[i]);
     if (v > peak) peak = v;
   }
   if (peak <= 1e-10) return samples;
 
-  const bins = new Uint32Array(2048);
+  const gain = 0.95 / peak;
   for (let i = 0; i < samples.length; i++) {
-    const b = Math.min(bins.length - 1, Math.floor(Math.abs(samples[i]) / peak * (bins.length - 1)));
-    bins[b]++;
-  }
-  const target = Math.max(1, Math.floor(samples.length * 0.9995));
-  let acc = 0;
-  let bin = bins.length - 1;
-  for (let i = 0; i < bins.length; i++) {
-    acc += bins[i];
-    if (acc >= target) { bin = i; break; }
-  }
-  const ref = Math.max(peak * 0.35, peak * bin / (bins.length - 1), 1e-10);
-  const gain = 0.9 / ref;
-  const fade = Math.min(EDGE_FADE, samples.length >> 3);
-
-  for (let i = 0; i < samples.length; i++) {
-    let v = samples[i] * gain;
-    if (fade > 0) {
-      const edge = Math.min(i + 1, samples.length - i);
-      if (edge < fade) v *= edge / fade;
-    }
-    samples[i] = Math.tanh(v * 0.9) / Math.tanh(0.9);
+    samples[i] = clamp(samples[i] * gain, -0.98, 0.98);
   }
   return samples;
 }
@@ -340,6 +331,7 @@ export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
   const mags = new Float64Array(FRAME / 2 + 1);
   const rows = N - HEADER_ROWS;
   const activeSamples = Math.min(samples.length, SYNTH_LEN);
+  const storedSamples = activeSamples;
 
   for (let x = 0; x < FRAMES; x++) {
     const start = x * HOP;
@@ -358,7 +350,7 @@ export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
     for (let k = 0; k <= FRAME / 2; k++) mags[k] = Math.hypot(re[k], im[k]);
 
     for (let y = 0; y < rows; y++) {
-      const m = imageBins[y];
+      const m = linearImageBins[y];
       const rr = re[m.lo] + (re[m.hi] - re[m.lo]) * m.f;
       const ii = im[m.lo] + (im[m.hi] - im[m.lo]) * m.f;
       const mag = mags[m.lo] + (mags[m.hi] - mags[m.lo]) * m.f;
@@ -375,7 +367,7 @@ export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
     }
   }
 
-  writeHeader(rgb, sampleRate, samples.length);
+  writeHeader(rgb, sampleRate, storedSamples);
   return rgb;
 }
 
@@ -397,6 +389,7 @@ export function fourierRGBToAudio(rgb) {
   const im = new Float64Array(FRAME);
   const phases = new Float64Array(synthPhases);
   const phaseVector = header && header.format >= 2;
+  const yMap = header && header.format >= 3 ? linearSynthYs : logSynthYs;
 
   for (let x = 0; x < FRAMES; x++) {
     re.fill(0);
@@ -405,7 +398,7 @@ export function fourierRGBToAudio(rgb) {
     for (let k = 1; k <= FRAME / 2; k++) {
       const freq = k * sampleRate / FRAME;
       if (freq > MAX_FREQ) continue;
-      const y = synthYs[k] * rows / (N - HEADER_ROWS);
+      const y = yMap[k] * rows / (N - HEADER_ROWS);
       if (phaseVector) {
         const c = readPhaseComplexAt(rgb, x, y, y0, rows);
         re[k] = c.re;

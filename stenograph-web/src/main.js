@@ -3,7 +3,7 @@ import {
   textToRGB, rgbToText, rgbToRawText, audioToRGB, rgbToAudio, toWavBlob,
   hideImageInImage, revealImageFromImageInfo,
 } from './steno.js';
-import { audioToFourierRGB, fourierRGBToAudio, isFourierAudioRGB } from './audio-fourier.js';
+import { FOURIER_MAX_SECONDS, audioToFourierRGB, fourierRGBToAudio, isFourierAudioRGB } from './audio-fourier.js';
 import { extractFromPhoto } from './extract.js';
 
 const $ = s => document.querySelector(s);
@@ -158,7 +158,10 @@ async function encodeSourceAudio() {
   fileRGB = fourier
     ? audioToFourierRGB(sourceAudio.samples, sourceAudio.sampleRate)
     : audioToRGB(sourceAudio.samples, sourceAudio.sampleRate);
-  fileHint.textContent = `audio/${audioMode.value} -> 1024x1024`;
+  const seconds = sourceAudio.samples.length / sourceAudio.sampleRate;
+  fileHint.textContent = fourier && seconds > FOURIER_MAX_SECONDS
+    ? `audio/fourier first ${FOURIER_MAX_SECONDS.toFixed(1)}s`
+    : `audio/${audioMode.value} -> 1024x1024`;
 }
 
 async function onFile(file) {
@@ -184,7 +187,10 @@ async function onFile(file) {
     fileLbl.textContent = file.name;
     fileHint.textContent = `${type} -> 1024x1024`;
     dropFile.classList.add('loaded');
-    setStatus(type === 'audio' ? `Loaded: ${file.name} (${getAudioModeName()})` : `Loaded: ${file.name}`, 'ok');
+    if (type === 'audio' && audioMode.value === 'fourier' && sourceAudio.samples.length / sourceAudio.sampleRate > FOURIER_MAX_SECONDS)
+      setStatus(`Loaded: ${file.name} (${getAudioModeName()}, first ${FOURIER_MAX_SECONDS.toFixed(1)}s)`, 'ok');
+    else
+      setStatus(type === 'audio' ? `Loaded: ${file.name} (${getAudioModeName()})` : `Loaded: ${file.name}`, 'ok');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'err');
     console.error(e);

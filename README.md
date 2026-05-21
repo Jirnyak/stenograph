@@ -12,9 +12,10 @@ can recover useful output from those images without PNG metadata.
 - Text -> image -> text, with redundant pixel voting and CRC checks.
 - Audio -> image -> audio in two browser modes:
   - `PCM exact`: stores 16-bit PCM bytes for PNG-only round trips.
-  - `Fourier robust`: stores a log-frequency sonogram with phase vectors. The
-    red channel is the drawable frequency map; green/blue preserve phase for
-    audible round trips.
+  - `Fourier robust`: stores a frequency image with phase vectors. The red
+    channel is the drawable frequency map; green/blue preserve phase for audible
+    round trips. It stores the first ~23.8 seconds cleanly instead of stretching
+    long tracks into a smeared full-length reconstruction.
 - Image -> cover image -> image, using low-bit image-in-image storage.
 - Photo extract: finds a photographed Stenograph square and rectifies it back to
   1024x1024.
@@ -87,4 +88,5 @@ current architecture is documented in `architecture.md`.
 - Keys are separate files and are not embedded in encrypted output.
 - Keep PNG for exact byte/image-in-image modes.
 - Use `Fourier robust` when the image should survive compression or be edited as
-  a frequency drawing.
+  a frequency drawing. Use `PCM exact` when full-length PNG-only audio recovery
+  matters more than editable image behavior.

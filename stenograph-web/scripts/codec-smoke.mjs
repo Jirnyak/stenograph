@@ -1,4 +1,9 @@
-import { audioToFourierRGB, fourierRGBToAudio, isFourierAudioRGB } from '../src/audio-fourier.js';
+import {
+  FOURIER_MAX_SECONDS,
+  audioToFourierRGB,
+  fourierRGBToAudio,
+  isFourierAudioRGB,
+} from '../src/audio-fourier.js';
 import { audioToRGB, rgbToAudio } from '../src/steno.js';
 
 const SR = 22050;
@@ -82,3 +87,10 @@ for (let y = 4; y < 1024; y++) {
 }
 assert(quietMax <= 4, `silent Fourier tail is not black, max=${quietMax}`);
 console.log(`silent tail: max=${quietMax}`);
+
+const long = chord(60);
+const longDecoded = fourierRGBToAudio(audioToFourierRGB(long, SR));
+const maxFourierSamples = Math.round(FOURIER_MAX_SECONDS * SR);
+assert(longDecoded.samples.length <= maxFourierSamples, 'long Fourier audio should be cropped, not stretched');
+assert(corr(long, longDecoded.samples) >= 0.95, 'cropped long Fourier prefix lost correlation');
+console.log(`long crop: ${longDecoded.samples.length} samples`);

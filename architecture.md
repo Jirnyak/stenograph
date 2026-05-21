@@ -111,7 +111,7 @@ audio → load/resample to 22050 Hz mono
 
 ```
 audio → load/resample to 22050 Hz mono → 1024 Hann-windowed frames
-      → FFT per frame → log-magnitude on a log-frequency image grid
+      → FFT per frame → log-magnitude on a linear FFT-bin image grid
       → R = magnitude, G/B = phase as cos/sin
       → rows 0..3: redundant AF header in pixels
       → save N×N PNG
@@ -119,14 +119,15 @@ audio → load/resample to 22050 Hz mono → 1024 Hann-windowed frames
 
 - Alternative web mode selected as `Fourier robust`.
 - Fixed frame size 1024, hop 512, 1024 frames: about 23.8 seconds at 22050 Hz.
-- Longer audio is resampled into the available time grid; shorter audio is padded.
+- Longer audio is cropped to the first available time grid instead of being
+  time-compressed and stretched back. Use PCM exact for full-length PNG audio.
 - Magnitude uses a fixed `log1p` range. No per-file metadata is needed for scale.
 - Phase is stored as a vector instead of a wrapped angle, so PNG round trips keep
   musical timing and JPEG/noise errors degrade more gradually.
 - JPEG/noise/resize damage becomes spectral blur instead of byte corruption.
 - Drawing on the red magnitude channel creates tones and attacks. If no `AF`
   header is present, the decoder ignores phase channels and treats the image as
-  a freehand magnitude map.
+  a freehand log-frequency magnitude map.
 
 ### Fourier Image → Audio
 
