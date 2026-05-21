@@ -31,9 +31,27 @@ npm run build
 
 The production output is `stenograph-web/dist/`.
 
+## Cloudflare Worker
+
+Live Worker URL:
+
+```text
+https://stenograph.bileter.workers.dev
+```
+
+Deploy the built Vite app as Worker static assets:
+
+```bash
+cd stenograph-web
+npm run deploy:worker
+```
+
+This runs `npm run build` and then publishes `stenograph-web/dist/` to the
+Cloudflare Worker named `stenograph`.
+
 ## Cloudflare Pages
 
-Use these Pages settings:
+If using Pages instead of the Worker URL above, use these Pages settings:
 
 - Build command: `npm run build`
 - Build output directory: `dist`
