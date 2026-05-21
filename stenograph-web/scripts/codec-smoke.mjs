@@ -1,7 +1,7 @@
 import {
-  FOURIER_MAX_SECONDS,
   audioToFourierRGB,
   fourierRGBToAudio,
+  getFourierProfileSeconds,
   isFourierAudioRGB,
 } from '../src/audio-fourier.js';
 import { audioToRGB, rgbToAudio } from '../src/steno.js';
@@ -30,6 +30,21 @@ function corr(a, b) {
   return ab / Math.sqrt(Math.max(aa * bb, EPS));
 }
 
+function resampleForTest(samples, count) {
+  const out = new Float64Array(count);
+  if (count === samples.length) {
+    out.set(samples);
+    return out;
+  }
+  for (let i = 0; i < count; i++) {
+    const p = i * (samples.length - 1) / (count - 1);
+    const lo = Math.floor(p);
+    const hi = Math.min(lo + 1, samples.length - 1);
+    out[i] = samples[lo] + (samples[hi] - samples[lo]) * (p - lo);
+  }
+  return out;
+}
+
 function tone(freq, seconds = 2) {
   const n = SR * seconds;
   const out = new Float32Array(n);
@@ -49,8 +64,8 @@ function chord(seconds = 2) {
   return out;
 }
 
-function checkFourier(name, samples, minCorr) {
-  const rgb = audioToFourierRGB(samples, SR);
+function checkFourier(name, samples, minCorr, profile = 'quality') {
+  const rgb = audioToFourierRGB(samples, SR, profile);
   const decoded = fourierRGBToAudio(rgb);
   const c = corr(samples, decoded.samples);
   assert(decoded.detected, `${name}: AF header was not detected`);
@@ -59,7 +74,7 @@ function checkFourier(name, samples, minCorr) {
   assert(decoded.samples.length === samples.length, `${name}: sample length changed`);
   assert(peak(decoded.samples) > 0.5, `${name}: decoded signal is too quiet`);
   assert(c >= minCorr, `${name}: Fourier correlation ${c.toFixed(4)} < ${minCorr}`);
-  console.log(`${name}: Fourier corr=${c.toFixed(4)} peak=${peak(decoded.samples).toFixed(3)}`);
+  console.log(`${name}: Fourier ${profile} corr=${c.toFixed(4)} peak=${peak(decoded.samples).toFixed(3)}`);
   return rgb;
 }
 
@@ -88,9 +103,18 @@ for (let y = 4; y < 1024; y++) {
 assert(quietMax <= 4, `silent Fourier tail is not black, max=${quietMax}`);
 console.log(`silent tail: max=${quietMax}`);
 
-const long = chord(60);
-const longDecoded = fourierRGBToAudio(audioToFourierRGB(long, SR));
-const maxFourierSamples = Math.round(FOURIER_MAX_SECONDS * SR);
-assert(longDecoded.samples.length <= maxFourierSamples, 'long Fourier audio should be cropped, not stretched');
-assert(corr(long, longDecoded.samples) >= 0.95, 'cropped long Fourier prefix lost correlation');
-console.log(`long crop: ${longDecoded.samples.length} samples`);
+assert(getFourierProfileSeconds('minute') > 55, 'minute Fourier profile is too short');
+assert(getFourierProfileSeconds('long') > 170, 'long Fourier profile is too short');
+
+const oneMinute = chord(60);
+const minuteDecoded = fourierRGBToAudio(audioToFourierRGB(oneMinute, SR, 'minute'));
+assert(minuteDecoded.samples.length === oneMinute.length, 'minute profile should preserve source duration');
+assert(corr(oneMinute, minuteDecoded.samples) >= 0.95, 'minute profile lost correlation');
+console.log(`minute span: ${minuteDecoded.samples.length} samples`);
+
+const threeMinutes = chord(180);
+const longDecoded = fourierRGBToAudio(audioToFourierRGB(threeMinutes, SR, 'long'));
+assert(longDecoded.sampleRate === 8000, 'long profile should use compact sample rate');
+assert(Math.abs(longDecoded.samples.length / longDecoded.sampleRate - 180) < 0.1, 'long profile duration changed');
+assert(corr(resampleForTest(threeMinutes, longDecoded.samples.length), longDecoded.samples) >= 0.95, 'long profile lost correlation');
+console.log(`long span: ${longDecoded.samples.length} samples at ${longDecoded.sampleRate}Hz`);

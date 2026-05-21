@@ -3,7 +3,7 @@ import {
   textToRGB, rgbToText, rgbToRawText, audioToRGB, rgbToAudio, toWavBlob,
   hideImageInImage, revealImageFromImageInfo,
 } from './steno.js';
-import { FOURIER_MAX_SECONDS, audioToFourierRGB, fourierRGBToAudio, isFourierAudioRGB } from './audio-fourier.js';
+import { audioToFourierRGB, fourierRGBToAudio, getFourierProfileSeconds, isFourierAudioRGB } from './audio-fourier.js';
 import { extractFromPhoto } from './extract.js';
 
 const $ = s => document.querySelector(s);
@@ -26,6 +26,7 @@ const coverLbl   = $('#cover-label');
 const coverHint  = $('#cover-hint');
 const hideBits   = $('#hide-bits');
 const audioMode  = $('#audio-mode');
+const fourierSpan = $('#fourier-span');
 const btnToImg   = $('#btn-to-img');
 const btnFromImg = $('#btn-from-img');
 const btnMul     = $('#btn-multiply');
@@ -153,14 +154,15 @@ function getAudioModeName() {
 async function encodeSourceAudio() {
   if (!sourceAudio) return;
   const fourier = audioMode.value === 'fourier';
+  const spanSeconds = getFourierProfileSeconds(fourierSpan.value);
   setStatus(fourier ? 'Drawing Fourier audio...' : 'Encoding PCM audio...', '');
   await tick();
   fileRGB = fourier
-    ? audioToFourierRGB(sourceAudio.samples, sourceAudio.sampleRate)
+    ? audioToFourierRGB(sourceAudio.samples, sourceAudio.sampleRate, fourierSpan.value)
     : audioToRGB(sourceAudio.samples, sourceAudio.sampleRate);
   const seconds = sourceAudio.samples.length / sourceAudio.sampleRate;
-  fileHint.textContent = fourier && seconds > FOURIER_MAX_SECONDS
-    ? `audio/fourier first ${FOURIER_MAX_SECONDS.toFixed(1)}s`
+  fileHint.textContent = fourier && seconds > spanSeconds
+    ? `audio/fourier fit ${spanSeconds.toFixed(0)}s`
     : `audio/${audioMode.value} -> 1024x1024`;
 }
 
@@ -187,8 +189,8 @@ async function onFile(file) {
     fileLbl.textContent = file.name;
     fileHint.textContent = `${type} -> 1024x1024`;
     dropFile.classList.add('loaded');
-    if (type === 'audio' && audioMode.value === 'fourier' && sourceAudio.samples.length / sourceAudio.sampleRate > FOURIER_MAX_SECONDS)
-      setStatus(`Loaded: ${file.name} (${getAudioModeName()}, first ${FOURIER_MAX_SECONDS.toFixed(1)}s)`, 'ok');
+    if (type === 'audio' && audioMode.value === 'fourier' && sourceAudio.samples.length / sourceAudio.sampleRate > getFourierProfileSeconds(fourierSpan.value))
+      setStatus(`Loaded: ${file.name} (${getAudioModeName()}, fit ${getFourierProfileSeconds(fourierSpan.value).toFixed(0)}s)`, 'ok');
     else
       setStatus(type === 'audio' ? `Loaded: ${file.name} (${getAudioModeName()})` : `Loaded: ${file.name}`, 'ok');
   } catch (e) {
@@ -416,6 +418,16 @@ audioMode.addEventListener('change', async () => {
   try {
     await encodeSourceAudio();
     setStatus(`Audio mode: ${getAudioModeName()}`, 'ok');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'err');
+    console.error(e);
+  }
+});
+fourierSpan.addEventListener('change', async () => {
+  if (!sourceAudio || audioMode.value !== 'fourier') return;
+  try {
+    await encodeSourceAudio();
+    setStatus(`Fourier span: ${getFourierProfileSeconds(fourierSpan.value).toFixed(0)}s`, 'ok');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'err');
     console.error(e);

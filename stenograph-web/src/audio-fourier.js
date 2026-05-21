@@ -6,8 +6,13 @@ const SAMPLE_RATE = 22050;
 const FRAME = 1024;
 const HOP = 512;
 const FRAMES = 1024;
-const SYNTH_LEN = (FRAMES - 1) * HOP + FRAME;
-export const FOURIER_MAX_SECONDS = SYNTH_LEN / SAMPLE_RATE;
+const DEFAULT_PROFILE_ID = 'quality';
+
+export const FOURIER_PROFILES = [
+  { id: 'quality', name: '24s quality', sampleRate: 22050, frame: 1024, hop: 512 },
+  { id: 'minute', name: '60s balanced', sampleRate: 22050, frame: 2048, hop: 1280 },
+  { id: 'long', name: '3min long', sampleRate: 8000, frame: 2048, hop: 1408 },
+];
 
 const HEADER_ROWS = 4;
 const HEADER_BYTES = 16;
@@ -33,11 +38,7 @@ const LUM_R = 0.299;
 const LUM_G = 0.587;
 const LUM_B = 0.114;
 
-const window1024 = makeHann(FRAME);
-const logSynthYs = makeLogSynthYMap(N - HEADER_ROWS);
-const linearImageBins = makeLinearImageBinMap(N - HEADER_ROWS);
-const linearSynthYs = makeLinearSynthYMap(N - HEADER_ROWS);
-const synthPhases = makeInitialPhases();
+const planCache = new Map();
 
 function clamp(n, lo, hi) {
   return n < lo ? lo : n > hi ? hi : n;
@@ -49,57 +50,98 @@ function makeHann(n) {
   return w;
 }
 
-function fitSamples(samples) {
-  const out = new Float64Array(SYNTH_LEN);
-  if (!samples.length) return out;
+function getProfile(profileId = DEFAULT_PROFILE_ID) {
+  const found = FOURIER_PROFILES.find(p => p.id === profileId);
+  return found || FOURIER_PROFILES[0];
+}
+
+function getSynthLen(profile) {
+  return (FRAMES - 1) * profile.hop + profile.frame;
+}
+
+export function getFourierProfileSeconds(profileId = DEFAULT_PROFILE_ID) {
+  const profile = getProfile(profileId);
+  return getSynthLen(profile) / profile.sampleRate;
+}
+
+function getPlan(profile) {
+  const key = `${profile.sampleRate}:${profile.frame}:${profile.hop}`;
+  const cached = planCache.get(key);
+  if (cached) return cached;
+  const rows = N - HEADER_ROWS;
+  const plan = {
+    window: makeHann(profile.frame),
+    linearImageBins: makeLinearImageBinMap(rows, profile.frame),
+    linearSynthYs: makeLinearSynthYMap(rows, profile.frame),
+    logSynthYs: makeLogSynthYMap(rows, profile.frame, profile.sampleRate),
+    synthPhases: makeInitialPhases(profile.frame),
+    synthLen: getSynthLen(profile),
+  };
+  planCache.set(key, plan);
+  return plan;
+}
+
+function fitSamples(samples, inputRate, profile) {
+  const plan = getPlan(profile);
+  const out = new Float64Array(plan.synthLen);
+  if (!samples.length) return { data: out, sampleCount: 0 };
+  const sampleCount = Math.max(1, Math.round(samples.length * profile.sampleRate / inputRate));
+  const source = inputRate === profile.sampleRate && sampleCount === samples.length
+    ? samples
+    : resample(samples, sampleCount);
 
   let peak = 0;
-  for (let i = 0; i < samples.length; i++) {
-    const v = Math.abs(samples[i]);
+  for (let i = 0; i < source.length; i++) {
+    const v = Math.abs(source[i]);
     if (v > peak) peak = v;
   }
   const gain = peak > 1e-10 ? 0.95 / peak : 1;
 
-  if (samples.length <= SYNTH_LEN) {
-    for (let i = 0; i < samples.length; i++) out[i] = samples[i] * gain;
-    return out;
+  if (source.length <= plan.synthLen) {
+    for (let i = 0; i < source.length; i++) out[i] = source[i] * gain;
+    return { data: out, sampleCount };
   }
 
-  for (let i = 0; i < SYNTH_LEN; i++) out[i] = samples[i] * gain;
-  return out;
+  for (let i = 0; i < plan.synthLen; i++) {
+    const p = i * (source.length - 1) / (plan.synthLen - 1);
+    const lo = Math.floor(p);
+    const hi = Math.min(lo + 1, source.length - 1);
+    out[i] = (source[lo] + (source[hi] - source[lo]) * (p - lo)) * gain;
+  }
+  return { data: out, sampleCount };
 }
 
-function makeLogSynthYMap(rows) {
-  const map = new Float64Array(FRAME / 2 + 1);
+function makeLogSynthYMap(rows, frame, sampleRate) {
+  const map = new Float64Array(frame / 2 + 1);
   const logRange = Math.log(MAX_FREQ / MIN_FREQ);
-  for (let k = 1; k <= FRAME / 2; k++) {
-    const freq = k * SAMPLE_RATE / FRAME;
+  for (let k = 1; k <= frame / 2; k++) {
+    const freq = k * sampleRate / frame;
     const t = Math.log(clamp(freq, MIN_FREQ, MAX_FREQ) / MIN_FREQ) / logRange;
     map[k] = (1 - t) * (rows - 1);
   }
   return map;
 }
 
-function makeLinearImageBinMap(rows) {
+function makeLinearImageBinMap(rows, frame) {
   const map = new Array(rows);
-  const maxBin = FRAME / 2;
+  const maxBin = frame / 2;
   for (let y = 0; y < rows; y++) {
-    const bin = (1 - y / (rows - 1)) * maxBin;
-    const lo = Math.floor(bin);
-    map[y] = { lo, hi: Math.min(lo + 1, maxBin), f: bin - lo };
+    const bin = Math.round((1 - y / (rows - 1)) * maxBin);
+    const k = clamp(bin, 1, maxBin);
+    map[y] = { lo: k, hi: k, f: 0 };
   }
   return map;
 }
 
-function makeLinearSynthYMap(rows) {
-  const map = new Float64Array(FRAME / 2 + 1);
-  const maxBin = FRAME / 2;
-  for (let k = 0; k <= maxBin; k++) map[k] = (1 - k / maxBin) * (rows - 1);
+function makeLinearSynthYMap(rows, frame) {
+  const map = new Float64Array(frame / 2 + 1);
+  const maxBin = frame / 2;
+  for (let k = 0; k <= maxBin; k++) map[k] = Math.round((1 - k / maxBin) * (rows - 1));
   return map;
 }
 
-function makeInitialPhases() {
-  const phases = new Float64Array(FRAME / 2 + 1);
+function makeInitialPhases(frame) {
+  const phases = new Float64Array(frame / 2 + 1);
   for (let k = 1; k < phases.length; k++) {
     let x = (k * 2654435761) >>> 0;
     x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
@@ -160,7 +202,7 @@ function mapFromByte(v) {
   return clamp((v - MAP_LO) / MAP_SCALE * MAG_MAX, 0, MAG_MAX);
 }
 
-function makeHeader(sampleRate, sampleCount) {
+function makeHeader(sampleRate, sampleCount, frame, hop) {
   const h = new Uint8Array(HEADER_BYTES);
   h[0] = 0x41; // A
   h[1] = 0x46; // F
@@ -169,13 +211,13 @@ function makeHeader(sampleRate, sampleCount) {
   const dv = new DataView(h.buffer);
   dv.setUint32(4, sampleRate >>> 0, true);
   dv.setUint32(8, sampleCount >>> 0, true);
-  dv.setUint16(12, FRAME, true);
-  dv.setUint16(14, HOP, true);
+  dv.setUint16(12, frame, true);
+  dv.setUint16(14, hop, true);
   return h;
 }
 
-function writeHeader(rgb, sampleRate, sampleCount) {
-  const h = makeHeader(sampleRate, sampleCount);
+function writeHeader(rgb, sampleRate, sampleCount, frame, hop) {
+  const h = makeHeader(sampleRate, sampleCount, frame, hop);
   for (let bit = 0; bit < HEADER_BITS; bit++) {
     const v = ((h[bit >> 3] >> (7 - (bit & 7))) & 1) ? BIT_ONE : BIT_ZERO;
     for (let r = 0; r < HEADER_REPS; r++) {
@@ -206,7 +248,9 @@ function readHeader(rgb) {
   const sampleCount = dv.getUint32(8, true);
   const frame = dv.getUint16(12, true);
   const hop = dv.getUint16(14, true);
-  if (sampleRate < 8000 || sampleRate > 96000 || frame !== FRAME || hop !== HOP) return null;
+  if (sampleRate < 8000 || sampleRate > 96000) return null;
+  if (frame < 512 || frame > 8192 || (frame & (frame - 1)) !== 0) return null;
+  if (hop < 128 || hop > frame) return null;
   return { format: h[3], sampleRate, sampleCount, frame, hop };
 }
 
@@ -321,36 +365,37 @@ function normalizeDecoded(samples) {
  * R carries log-frequency magnitude. G/B carry phase as cos/sin.
  * The header is redundant in pixels; no PNG metadata is used.
  */
-export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
-  const data = fitSamples(samples);
+export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE, profileId = DEFAULT_PROFILE_ID) {
+  const profile = getProfile(profileId);
+  const plan = getPlan(profile);
+  const { data, sampleCount } = fitSamples(samples, sampleRate, profile);
   const rgb = new Uint8Array(T);
   rgb.fill(128);
 
-  const re = new Float64Array(FRAME);
-  const im = new Float64Array(FRAME);
-  const mags = new Float64Array(FRAME / 2 + 1);
+  const re = new Float64Array(profile.frame);
+  const im = new Float64Array(profile.frame);
+  const mags = new Float64Array(profile.frame / 2 + 1);
   const rows = N - HEADER_ROWS;
-  const activeSamples = Math.min(samples.length, SYNTH_LEN);
-  const storedSamples = activeSamples;
+  const activeSamples = Math.min(sampleCount, plan.synthLen);
 
   for (let x = 0; x < FRAMES; x++) {
-    const start = x * HOP;
+    const start = x * profile.hop;
     if (start >= activeSamples) {
       for (let y = 0; y < rows; y++) writeQuiet(rgb, ((y + HEADER_ROWS) * N + x) * 3);
       continue;
     }
 
-    for (let i = 0; i < FRAME; i++) {
-      const v = data[start + i] * window1024[i];
+    for (let i = 0; i < profile.frame; i++) {
+      const v = data[start + i] * plan.window[i];
       re[i] = v;
       im[i] = 0;
     }
     fft(re, im);
 
-    for (let k = 0; k <= FRAME / 2; k++) mags[k] = Math.hypot(re[k], im[k]);
+    for (let k = 0; k <= profile.frame / 2; k++) mags[k] = Math.hypot(re[k], im[k]);
 
     for (let y = 0; y < rows; y++) {
-      const m = linearImageBins[y];
+      const m = plan.linearImageBins[y];
       const rr = re[m.lo] + (re[m.hi] - re[m.lo]) * m.f;
       const ii = im[m.lo] + (im[m.hi] - im[m.lo]) * m.f;
       const mag = mags[m.lo] + (mags[m.hi] - mags[m.lo]) * m.f;
@@ -367,7 +412,7 @@ export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
     }
   }
 
-  writeHeader(rgb, sampleRate, storedSamples);
+  writeHeader(rgb, profile.sampleRate, sampleCount, profile.frame, profile.hop);
   return rgb;
 }
 
@@ -380,23 +425,27 @@ export function fourierRGBToAudio(rgb) {
   if (!rgb || rgb.length !== T) throw new Error('Image must be 1024x1024 RGB');
 
   const header = readHeader(rgb);
-  const sampleRate = header ? header.sampleRate : SAMPLE_RATE;
+  const profile = header
+    ? { sampleRate: header.sampleRate, frame: header.frame, hop: header.hop }
+    : getProfile(DEFAULT_PROFILE_ID);
+  const plan = getPlan(profile);
+  const sampleRate = profile.sampleRate;
   const y0 = header ? HEADER_ROWS : 0;
   const rows = N - y0;
-  const out = new Float64Array(SYNTH_LEN);
-  const norm = new Float64Array(SYNTH_LEN);
-  const re = new Float64Array(FRAME);
-  const im = new Float64Array(FRAME);
-  const phases = new Float64Array(synthPhases);
+  const out = new Float64Array(plan.synthLen);
+  const norm = new Float64Array(plan.synthLen);
+  const re = new Float64Array(profile.frame);
+  const im = new Float64Array(profile.frame);
+  const phases = new Float64Array(plan.synthPhases);
   const phaseVector = header && header.format >= 2;
-  const yMap = header && header.format >= 3 ? linearSynthYs : logSynthYs;
+  const yMap = header && header.format >= 3 ? plan.linearSynthYs : plan.logSynthYs;
 
   for (let x = 0; x < FRAMES; x++) {
     re.fill(0);
     im.fill(0);
 
-    for (let k = 1; k <= FRAME / 2; k++) {
-      const freq = k * sampleRate / FRAME;
+    for (let k = 1; k <= profile.frame / 2; k++) {
+      const freq = k * sampleRate / profile.frame;
       if (freq > MAX_FREQ) continue;
       const y = yMap[k] * rows / (N - HEADER_ROWS);
       if (phaseVector) {
@@ -410,12 +459,12 @@ export function fourierRGBToAudio(rgb) {
         const ph = phases[k];
         re[k] = mag * Math.cos(ph);
         im[k] = mag * Math.sin(ph);
-        phases[k] += 2 * Math.PI * k * HOP / FRAME;
+        phases[k] += 2 * Math.PI * k * profile.hop / profile.frame;
         if (phases[k] > Math.PI * 2) phases[k] %= Math.PI * 2;
       }
-      if (k < FRAME / 2) {
-        re[FRAME - k] = re[k];
-        im[FRAME - k] = -im[k];
+      if (k < profile.frame / 2) {
+        re[profile.frame - k] = re[k];
+        im[profile.frame - k] = -im[k];
       } else {
         im[k] = 0;
       }
@@ -423,9 +472,9 @@ export function fourierRGBToAudio(rgb) {
 
     fft(re, im, true);
 
-    const start = x * HOP;
-    for (let i = 0; i < FRAME; i++) {
-      const w = window1024[i];
+    const start = x * profile.hop;
+    for (let i = 0; i < profile.frame; i++) {
+      const w = plan.window[i];
       out[start + i] += re[i] * w;
       norm[start + i] += w * w;
     }
@@ -435,9 +484,9 @@ export function fourierRGBToAudio(rgb) {
     out[i] = norm[i] > NORM_FLOOR ? out[i] / norm[i] : 0;
   }
 
-  const wanted = header && header.sampleCount > 0 && header.sampleCount <= SAMPLE_RATE * 600
+  const wanted = header && header.sampleCount > 0 && header.sampleCount <= sampleRate * 600
     ? header.sampleCount
-    : SYNTH_LEN;
+    : plan.synthLen;
   let samples = out;
   if (wanted < out.length) samples = out.slice(0, wanted);
   else if (wanted > out.length) samples = resample(out, wanted);

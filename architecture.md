@@ -118,9 +118,11 @@ audio → load/resample to 22050 Hz mono → 1024 Hann-windowed frames
 ```
 
 - Alternative web mode selected as `Fourier robust`.
-- Fixed frame size 1024, hop 512, 1024 frames: about 23.8 seconds at 22050 Hz.
-- Longer audio is cropped to the first available time grid instead of being
-  time-compressed and stretched back. Use PCM exact for full-length PNG audio.
+- 1024 image columns are time frames. Span presets trade quality for duration:
+  1024/512 at 22050 Hz (~23.8s), 2048/1280 at 22050 Hz (~59.5s), or
+  2048/1408 at 8000 Hz (~180.4s).
+- Longer audio is fitted into the selected time grid and expanded back on decode.
+  Choose a longer span to reduce this time-warping.
 - Magnitude uses a fixed `log1p` range. No per-file metadata is needed for scale.
 - Phase is stored as a vector instead of a wrapped angle, so PNG round trips keep
   musical timing and JPEG/noise errors degrade more gradually.
