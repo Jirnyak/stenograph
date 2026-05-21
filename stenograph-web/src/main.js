@@ -3,7 +3,7 @@ import {
   textToRGB, rgbToText, rgbToRawText, audioToRGB, rgbToAudio, toWavBlob,
   hideImageInImage, revealImageFromImageInfo,
 } from './steno.js';
-import { audioToFourierRGB, fourierRGBToAudio } from './audio-fourier.js';
+import { audioToFourierRGB, fourierRGBToAudio, isFourierAudioRGB } from './audio-fourier.js';
 import { extractFromPhoto } from './extract.js';
 
 const $ = s => document.querySelector(s);
@@ -243,15 +243,17 @@ async function doFromImage() {
     const text = await rgbToText(fileRGB);
     showText(text || rgbToRawText(fileRGB));
 
-    // 3. Audio — blindly run iFFT, always works
-    setStatus(`Decoding ${getAudioModeName()} audio...`, '');
+    // 3. Audio — blindly run selected decoder, but respect AF Fourier images.
+    const useFourier = audioMode.value === 'fourier' || isFourierAudioRGB(fileRGB);
+    if (useFourier && audioMode.value !== 'fourier') audioMode.value = 'fourier';
+    setStatus(`Decoding ${useFourier ? 'Fourier' : 'PCM'} audio...`, '');
     await tick();
-    const audio = audioMode.value === 'fourier'
+    const audio = useFourier
       ? fourierRGBToAudio(fileRGB)
       : rgbToAudio(fileRGB);
     showAudio(audio.samples, audio.sampleRate);
 
-    setStatus(`From image: all outputs (${getAudioModeName()} audio)`, 'ok');
+    setStatus(`From image: all outputs (${useFourier ? 'Fourier' : 'PCM'} audio)`, 'ok');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'err');
     console.error(e);

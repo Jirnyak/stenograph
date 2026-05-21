@@ -1,4 +1,4 @@
-import { audioToFourierRGB, fourierRGBToAudio } from '../src/audio-fourier.js';
+import { audioToFourierRGB, fourierRGBToAudio, isFourierAudioRGB } from '../src/audio-fourier.js';
 import { audioToRGB, rgbToAudio } from '../src/steno.js';
 
 const SR = 22050;
@@ -49,11 +49,13 @@ function checkFourier(name, samples, minCorr) {
   const decoded = fourierRGBToAudio(rgb);
   const c = corr(samples, decoded.samples);
   assert(decoded.detected, `${name}: AF header was not detected`);
+  assert(isFourierAudioRGB(rgb), `${name}: AF image was not auto-detectable`);
   assert(decoded.sampleRate === SR, `${name}: sample rate changed`);
   assert(decoded.samples.length === samples.length, `${name}: sample length changed`);
   assert(peak(decoded.samples) > 0.5, `${name}: decoded signal is too quiet`);
   assert(c >= minCorr, `${name}: Fourier correlation ${c.toFixed(4)} < ${minCorr}`);
   console.log(`${name}: Fourier corr=${c.toFixed(4)} peak=${peak(decoded.samples).toFixed(3)}`);
+  return rgb;
 }
 
 function checkPCM(name, samples) {
@@ -68,7 +70,15 @@ function checkPCM(name, samples) {
 const sine = tone(440);
 const triad = chord();
 
-checkFourier('sine 440Hz', sine, 0.95);
+const sineRGB = checkFourier('sine 440Hz', sine, 0.95);
 checkFourier('three-tone chord', triad, 0.95);
 checkPCM('sine 440Hz', sine);
 checkPCM('three-tone chord', triad);
+
+let quietMax = 0;
+for (let y = 4; y < 1024; y++) {
+  const p = (y * 1024 + 1023) * 3;
+  quietMax = Math.max(quietMax, sineRGB[p], sineRGB[p + 1], sineRGB[p + 2]);
+}
+assert(quietMax <= 4, `silent Fourier tail is not black, max=${quietMax}`);
+console.log(`silent tail: max=${quietMax}`);

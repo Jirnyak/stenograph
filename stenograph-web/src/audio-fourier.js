@@ -24,6 +24,9 @@ const MAP_LO = 4;
 const MAP_SCALE = 247;
 const PHASE_CENTER = 128;
 const PHASE_RADIUS = 123;
+const QUIET_LOG = 0.055;
+const EDGE_FADE = 256;
+const NORM_FLOOR = 1e-4;
 
 const LUM_R = 0.299;
 const LUM_G = 0.587;
@@ -205,6 +208,10 @@ function readHeader(rgb) {
   return { format: h[3], sampleRate, sampleCount, frame, hop };
 }
 
+export function isFourierAudioRGB(rgb) {
+  return !!(rgb && rgb.length === T && readHeader(rgb));
+}
+
 function resample(samples, count) {
   const out = new Float64Array(count);
   if (!samples.length || !count) return out;
@@ -255,8 +262,11 @@ function readPhaseComplexAt(rgb, frame, y, y0, rows) {
   const f = y - y1;
   const p1 = ((y1 + y0) * N + frame) * 3;
   const p2 = ((y2 + y0) * N + frame) * 3;
-  const m1 = Math.expm1(mapFromByte(rgb[p1]));
-  const m2 = Math.expm1(mapFromByte(rgb[p2]));
+  const l1 = mapFromByte(rgb[p1]);
+  const l2 = mapFromByte(rgb[p2]);
+  if (l1 < QUIET_LOG && l2 < QUIET_LOG) return { re: 0, im: 0 };
+  const m1 = Math.expm1(l1);
+  const m2 = Math.expm1(l2);
   const r1 = m1 * phaseFromByte(rgb[p1 + 1]);
   const i1 = m1 * phaseFromByte(rgb[p1 + 2]);
   const r2 = m2 * phaseFromByte(rgb[p2 + 1]);
@@ -265,6 +275,54 @@ function readPhaseComplexAt(rgb, frame, y, y0, rows) {
     re: r1 + (r2 - r1) * f,
     im: i1 + (i2 - i1) * f,
   };
+}
+
+function writeQuiet(rgb, p) {
+  rgb[p] = MAP_LO;
+  rgb[p + 1] = MAP_LO;
+  rgb[p + 2] = MAP_LO;
+}
+
+function normalizeDecoded(samples) {
+  if (!samples.length) return samples;
+
+  let mean = 0;
+  for (let i = 0; i < samples.length; i++) mean += samples[i];
+  mean /= samples.length;
+
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    samples[i] -= mean;
+    const v = Math.abs(samples[i]);
+    if (v > peak) peak = v;
+  }
+  if (peak <= 1e-10) return samples;
+
+  const bins = new Uint32Array(2048);
+  for (let i = 0; i < samples.length; i++) {
+    const b = Math.min(bins.length - 1, Math.floor(Math.abs(samples[i]) / peak * (bins.length - 1)));
+    bins[b]++;
+  }
+  const target = Math.max(1, Math.floor(samples.length * 0.9995));
+  let acc = 0;
+  let bin = bins.length - 1;
+  for (let i = 0; i < bins.length; i++) {
+    acc += bins[i];
+    if (acc >= target) { bin = i; break; }
+  }
+  const ref = Math.max(peak * 0.35, peak * bin / (bins.length - 1), 1e-10);
+  const gain = 0.9 / ref;
+  const fade = Math.min(EDGE_FADE, samples.length >> 3);
+
+  for (let i = 0; i < samples.length; i++) {
+    let v = samples[i] * gain;
+    if (fade > 0) {
+      const edge = Math.min(i + 1, samples.length - i);
+      if (edge < fade) v *= edge / fade;
+    }
+    samples[i] = Math.tanh(v * 0.9) / Math.tanh(0.9);
+  }
+  return samples;
 }
 
 /**
@@ -281,9 +339,15 @@ export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
   const im = new Float64Array(FRAME);
   const mags = new Float64Array(FRAME / 2 + 1);
   const rows = N - HEADER_ROWS;
+  const activeSamples = Math.min(samples.length, SYNTH_LEN);
 
   for (let x = 0; x < FRAMES; x++) {
     const start = x * HOP;
+    if (start >= activeSamples) {
+      for (let y = 0; y < rows; y++) writeQuiet(rgb, ((y + HEADER_ROWS) * N + x) * 3);
+      continue;
+    }
+
     for (let i = 0; i < FRAME; i++) {
       const v = data[start + i] * window1024[i];
       re[i] = v;
@@ -299,10 +363,15 @@ export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
       const ii = im[m.lo] + (im[m.hi] - im[m.lo]) * m.f;
       const mag = mags[m.lo] + (mags[m.hi] - mags[m.lo]) * m.f;
       const len = Math.hypot(rr, ii);
+      const logMag = Math.log1p(mag);
       const p = ((y + HEADER_ROWS) * N + x) * 3;
-      rgb[p] = mapToByte(Math.log1p(mag));
-      rgb[p + 1] = phaseToByte(len > 1e-12 ? rr / len : 1);
-      rgb[p + 2] = phaseToByte(len > 1e-12 ? ii / len : 0);
+      if (logMag < QUIET_LOG || len < 1e-12) {
+        writeQuiet(rgb, p);
+      } else {
+        rgb[p] = mapToByte(logMag);
+        rgb[p + 1] = phaseToByte(rr / len);
+        rgb[p + 2] = phaseToByte(ii / len);
+      }
     }
   }
 
@@ -343,6 +412,7 @@ export function fourierRGBToAudio(rgb) {
         im[k] = c.im;
       } else {
         const logMag = readLogAt(rgb, x, y, y0, rows);
+        if (logMag < QUIET_LOG) continue;
         const mag = Math.expm1(logMag);
         const ph = phases[k];
         re[k] = mag * Math.cos(ph);
@@ -369,7 +439,7 @@ export function fourierRGBToAudio(rgb) {
   }
 
   for (let i = 0; i < out.length; i++) {
-    if (norm[i] > 1e-8) out[i] /= norm[i];
+    out[i] = norm[i] > NORM_FLOOR ? out[i] / norm[i] : 0;
   }
 
   const wanted = header && header.sampleCount > 0 && header.sampleCount <= SAMPLE_RATE * 600
@@ -379,15 +449,5 @@ export function fourierRGBToAudio(rgb) {
   if (wanted < out.length) samples = out.slice(0, wanted);
   else if (wanted > out.length) samples = resample(out, wanted);
 
-  let peak = 0;
-  for (let i = 0; i < samples.length; i++) {
-    const v = Math.abs(samples[i]);
-    if (v > peak) peak = v;
-  }
-  if (peak > 1e-10) {
-    const gain = 0.95 / peak;
-    for (let i = 0; i < samples.length; i++) samples[i] *= gain;
-  }
-
-  return { samples, sampleRate, detected: !!header };
+  return { samples: normalizeDecoded(samples), sampleRate, detected: !!header };
 }
