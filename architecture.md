@@ -119,8 +119,9 @@ audio → load/resample to the selected grid rate → 1024 Hann-windowed frames
 
 - Alternative web mode selected as `Fourier robust`.
 - 1024 image columns are time frames. The 0..500s span slider computes a
-  discrete grid and stores it in the `AF` header. While the slider is untouched,
-  loading an audio file moves it to that file's duration, capped at 500s. Short
+  discrete grid and stores it in the `AF` header. With the Auto tick enabled,
+  loading an audio file moves the slider to that file's duration, capped at
+  500s. Moving the slider by hand disables Auto until it is ticked again. Short
   spans use 1024-sample FFT frames at 22050 Hz. Longer spans use 2048-sample
   frames and drop the stored sample rate when needed: about 60s stays at 22050
   Hz, about 180s uses 8000 Hz, and 500s uses about 4000 Hz.

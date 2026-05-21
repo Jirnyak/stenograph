@@ -48,10 +48,12 @@ h3 { color: #888; margin-bottom: 8px; }
   border-radius: 6px; padding: 6px 8px; font: inherit;
 }
 .options .range-option {
-  align-items: stretch; flex-direction: column; gap: 4px;
+  display: flex; align-items: stretch; flex-direction: column; gap: 4px;
   min-width: min(320px, 100%);
 }
-.range-option span { display: flex; justify-content: space-between; gap: 12px; }
+.range-head { display: flex; justify-content: space-between; gap: 12px; }
+.check-option { color: #999; white-space: nowrap; }
+.check-option input { accent-color: #777; }
 .options input[type="range"] { width: 100%; accent-color: #777; }
 #fourier-span-label { color: #ddd; white-space: nowrap; }
 

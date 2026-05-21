@@ -27,6 +27,7 @@ const coverHint  = $('#cover-hint');
 const hideBits   = $('#hide-bits');
 const audioMode  = $('#audio-mode');
 const fourierSpan = $('#fourier-span');
+const fourierAuto = $('#fourier-auto');
 const fourierSpanLabel = $('#fourier-span-label');
 const btnToImg   = $('#btn-to-img');
 const btnFromImg = $('#btn-from-img');
@@ -56,7 +57,6 @@ let keyRGB  = null;
 let coverRGB = null;
 let rawSourceImg = null; // original Image element for extract
 let sourceAudio = null;
-let fourierSpanAuto = true;
 
 function setStatus(msg, type = '') {
   statusEl.textContent = msg;
@@ -206,7 +206,7 @@ async function onFile(file) {
       setStatus('Decoding audio...', '');
       const samples = await loadAudioFile(file);
       sourceAudio = { samples, sampleRate: 22050 };
-      if (fourierSpanAuto) setFourierSpanTarget(samples.length / sourceAudio.sampleRate);
+      if (fourierAuto.checked) setFourierSpanTarget(samples.length / sourceAudio.sampleRate);
       await encodeSourceAudio();
     } else {
       setStatus('Encoding text...', '');
@@ -457,8 +457,19 @@ audioMode.addEventListener('change', async () => {
   }
 });
 fourierSpan.addEventListener('input', () => {
-  fourierSpanAuto = false;
+  fourierAuto.checked = false;
   updateFourierSpanLabel();
+});
+fourierAuto.addEventListener('change', async () => {
+  if (!fourierAuto.checked || !sourceAudio) return;
+  try {
+    const spanInfo = setFourierSpanTarget(sourceAudio.samples.length / sourceAudio.sampleRate);
+    if (audioMode.value === 'fourier') await encodeSourceAudio();
+    setStatus(`Fourier auto: ${formatSeconds(spanInfo.seconds)}`, 'ok');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'err');
+    console.error(e);
+  }
 });
 fourierSpan.addEventListener('change', async () => {
   if (!sourceAudio || audioMode.value !== 'fourier') return;

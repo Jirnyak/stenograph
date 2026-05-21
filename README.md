@@ -14,10 +14,10 @@ can recover useful output from those images without PNG metadata.
   - `PCM exact`: stores 16-bit PCM bytes for PNG-only round trips.
   - `Fourier robust`: stores a frequency image with phase vectors. The red
     channel is the drawable frequency map; green/blue preserve phase for audible
-    round trips. A 0..500s span slider computes the Fourier grid; it starts near
-    one minute and, unless moved by the user, follows the loaded audio duration.
-    Longer spans trade sample rate and time resolution for duration. Tracks
-    longer than the selected span are fitted into it and expanded back.
+    round trips. A 0..500s span slider computes the Fourier grid; its Auto tick
+    follows the loaded audio duration, capped at 500s. Longer spans trade sample
+    rate and time resolution for duration. Tracks longer than the selected span
+    are fitted into it and expanded back.
 - Image -> cover image -> image, using low-bit image-in-image storage.
 - Photo extract: finds a photographed Stenograph square and rectifies it back to
   1024x1024.
