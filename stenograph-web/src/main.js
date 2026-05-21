@@ -56,6 +56,7 @@ let keyRGB  = null;
 let coverRGB = null;
 let rawSourceImg = null; // original Image element for extract
 let sourceAudio = null;
+let fourierSpanAuto = true;
 
 function setStatus(msg, type = '') {
   statusEl.textContent = msg;
@@ -167,6 +168,14 @@ function updateFourierSpanLabel() {
   return info;
 }
 
+function setFourierSpanTarget(seconds) {
+  const min = Number(fourierSpan.min);
+  const max = Number(fourierSpan.max);
+  const target = Math.max(min, Math.min(max, seconds));
+  fourierSpan.value = target.toFixed(1);
+  return updateFourierSpanLabel();
+}
+
 async function encodeSourceAudio() {
   if (!sourceAudio) return;
   const fourier = audioMode.value === 'fourier';
@@ -197,6 +206,7 @@ async function onFile(file) {
       setStatus('Decoding audio...', '');
       const samples = await loadAudioFile(file);
       sourceAudio = { samples, sampleRate: 22050 };
+      if (fourierSpanAuto) setFourierSpanTarget(samples.length / sourceAudio.sampleRate);
       await encodeSourceAudio();
     } else {
       setStatus('Encoding text...', '');
@@ -447,6 +457,7 @@ audioMode.addEventListener('change', async () => {
   }
 });
 fourierSpan.addEventListener('input', () => {
+  fourierSpanAuto = false;
   updateFourierSpanLabel();
 });
 fourierSpan.addEventListener('change', async () => {
