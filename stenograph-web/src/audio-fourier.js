@@ -22,6 +22,8 @@ const MAX_FREQ = 10000;
 const MAG_MAX = 6.0;
 const MAP_LO = 4;
 const MAP_SCALE = 247;
+const PHASE_CENTER = 128;
+const PHASE_RADIUS = 123;
 
 const LUM_R = 0.299;
 const LUM_G = 0.587;
@@ -158,7 +160,7 @@ function makeHeader(sampleRate, sampleCount) {
   h[0] = 0x41; // A
   h[1] = 0x46; // F
   h[2] = 1;
-  h[3] = 1; // log-frequency magnitude format
+  h[3] = 2; // log-magnitude + phase-vector format
   const dv = new DataView(h.buffer);
   dv.setUint32(4, sampleRate >>> 0, true);
   dv.setUint32(8, sampleCount >>> 0, true);
@@ -200,7 +202,7 @@ function readHeader(rgb) {
   const frame = dv.getUint16(12, true);
   const hop = dv.getUint16(14, true);
   if (sampleRate < 8000 || sampleRate > 96000 || frame !== FRAME || hop !== HOP) return null;
-  return { sampleRate, sampleCount, frame, hop };
+  return { format: h[3], sampleRate, sampleCount, frame, hop };
 }
 
 function resample(samples, count) {
@@ -239,9 +241,35 @@ function readLogAt(rgb, frame, y, y0, rows) {
   return sum / n;
 }
 
+function phaseToByte(v) {
+  return clamp(Math.round(PHASE_CENTER + clamp(v, -1, 1) * PHASE_RADIUS), 0, 255);
+}
+
+function phaseFromByte(v) {
+  return clamp((v - PHASE_CENTER) / PHASE_RADIUS, -1, 1);
+}
+
+function readPhaseComplexAt(rgb, frame, y, y0, rows) {
+  const y1 = clamp(Math.floor(y), 0, rows - 1);
+  const y2 = Math.min(y1 + 1, rows - 1);
+  const f = y - y1;
+  const p1 = ((y1 + y0) * N + frame) * 3;
+  const p2 = ((y2 + y0) * N + frame) * 3;
+  const m1 = Math.expm1(mapFromByte(rgb[p1]));
+  const m2 = Math.expm1(mapFromByte(rgb[p2]));
+  const r1 = m1 * phaseFromByte(rgb[p1 + 1]);
+  const i1 = m1 * phaseFromByte(rgb[p1 + 2]);
+  const r2 = m2 * phaseFromByte(rgb[p2 + 1]);
+  const i2 = m2 * phaseFromByte(rgb[p2 + 2]);
+  return {
+    re: r1 + (r2 - r1) * f,
+    im: i1 + (i2 - i1) * f,
+  };
+}
+
 /**
  * Audio -> editable Fourier image.
- * R/G carry log-frequency magnitude. B carries the broadband envelope.
+ * R carries log-frequency magnitude. G/B carry phase as cos/sin.
  * The header is redundant in pixels; no PNG metadata is used.
  */
 export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
@@ -256,27 +284,25 @@ export function audioToFourierRGB(samples, sampleRate = SAMPLE_RATE) {
 
   for (let x = 0; x < FRAMES; x++) {
     const start = x * HOP;
-    let energy = 0;
     for (let i = 0; i < FRAME; i++) {
       const v = data[start + i] * window1024[i];
       re[i] = v;
       im[i] = 0;
-      energy += v * v;
     }
     fft(re, im);
 
     for (let k = 0; k <= FRAME / 2; k++) mags[k] = Math.hypot(re[k], im[k]);
-    const env = clamp(Math.sqrt(energy / FRAME) * 2.8, 0, 1);
-    const b = Math.round(MAP_LO + Math.sqrt(env) * MAP_SCALE);
 
     for (let y = 0; y < rows; y++) {
       const m = imageBins[y];
+      const rr = re[m.lo] + (re[m.hi] - re[m.lo]) * m.f;
+      const ii = im[m.lo] + (im[m.hi] - im[m.lo]) * m.f;
       const mag = mags[m.lo] + (mags[m.hi] - mags[m.lo]) * m.f;
-      const px = mapToByte(Math.log1p(mag));
+      const len = Math.hypot(rr, ii);
       const p = ((y + HEADER_ROWS) * N + x) * 3;
-      rgb[p] = px;
-      rgb[p + 1] = px;
-      rgb[p + 2] = b;
+      rgb[p] = mapToByte(Math.log1p(mag));
+      rgb[p + 1] = phaseToByte(len > 1e-12 ? rr / len : 1);
+      rgb[p + 2] = phaseToByte(len > 1e-12 ? ii / len : 0);
     }
   }
 
@@ -301,23 +327,35 @@ export function fourierRGBToAudio(rgb) {
   const re = new Float64Array(FRAME);
   const im = new Float64Array(FRAME);
   const phases = new Float64Array(synthPhases);
+  const phaseVector = header && header.format >= 2;
 
   for (let x = 0; x < FRAMES; x++) {
     re.fill(0);
     im.fill(0);
 
-    for (let k = 1; k < FRAME / 2; k++) {
+    for (let k = 1; k <= FRAME / 2; k++) {
       const freq = k * sampleRate / FRAME;
       if (freq > MAX_FREQ) continue;
-      const logMag = readLogAt(rgb, x, synthYs[k] * rows / (N - HEADER_ROWS), y0, rows);
-      const mag = Math.expm1(logMag);
-      const ph = phases[k];
-      re[k] = mag * Math.cos(ph);
-      im[k] = mag * Math.sin(ph);
-      re[FRAME - k] = re[k];
-      im[FRAME - k] = -im[k];
-      phases[k] += 2 * Math.PI * k * HOP / FRAME;
-      if (phases[k] > Math.PI * 2) phases[k] %= Math.PI * 2;
+      const y = synthYs[k] * rows / (N - HEADER_ROWS);
+      if (phaseVector) {
+        const c = readPhaseComplexAt(rgb, x, y, y0, rows);
+        re[k] = c.re;
+        im[k] = c.im;
+      } else {
+        const logMag = readLogAt(rgb, x, y, y0, rows);
+        const mag = Math.expm1(logMag);
+        const ph = phases[k];
+        re[k] = mag * Math.cos(ph);
+        im[k] = mag * Math.sin(ph);
+        phases[k] += 2 * Math.PI * k * HOP / FRAME;
+        if (phases[k] > Math.PI * 2) phases[k] %= Math.PI * 2;
+      }
+      if (k < FRAME / 2) {
+        re[FRAME - k] = re[k];
+        im[FRAME - k] = -im[k];
+      } else {
+        im[k] = 0;
+      }
     }
 
     fft(re, im, true);
@@ -334,11 +372,12 @@ export function fourierRGBToAudio(rgb) {
     if (norm[i] > 1e-8) out[i] /= norm[i];
   }
 
-  let samples = out;
   const wanted = header && header.sampleCount > 0 && header.sampleCount <= SAMPLE_RATE * 600
     ? header.sampleCount
     : SYNTH_LEN;
-  if (wanted !== out.length) samples = resample(out, wanted);
+  let samples = out;
+  if (wanted < out.length) samples = out.slice(0, wanted);
+  else if (wanted > out.length) samples = resample(out, wanted);
 
   let peak = 0;
   for (let i = 0; i < samples.length; i++) {

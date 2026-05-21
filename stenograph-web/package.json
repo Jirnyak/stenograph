@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:codecs": "node scripts/codec-smoke.mjs",
     "deploy:worker": "npm run build && npx wrangler deploy --name stenograph --assets=dist --compatibility-date 2026-05-21",
     "preview": "vite preview"
   },

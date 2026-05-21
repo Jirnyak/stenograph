@@ -112,7 +112,7 @@ audio → load/resample to 22050 Hz mono
 ```
 audio → load/resample to 22050 Hz mono → 1024 Hann-windowed frames
       → FFT per frame → log-magnitude on a log-frequency image grid
-      → R/G = redundant magnitude, B = broadband envelope
+      → R = magnitude, G/B = phase as cos/sin
       → rows 0..3: redundant AF header in pixels
       → save N×N PNG
 ```
@@ -121,17 +121,19 @@ audio → load/resample to 22050 Hz mono → 1024 Hann-windowed frames
 - Fixed frame size 1024, hop 512, 1024 frames: about 23.8 seconds at 22050 Hz.
 - Longer audio is resampled into the available time grid; shorter audio is padded.
 - Magnitude uses a fixed `log1p` range. No per-file metadata is needed for scale.
-- Phase is not stored. It is regenerated with deterministic phase continuation.
+- Phase is stored as a vector instead of a wrapped angle, so PNG round trips keep
+  musical timing and JPEG/noise errors degrade more gradually.
 - JPEG/noise/resize damage becomes spectral blur instead of byte corruption.
-- Drawing a horizontal bright line creates a tone; vertical marks create attacks.
+- Drawing on the red magnitude channel creates tones and attacks. If no `AF`
+  header is present, the decoder ignores phase channels and treats the image as
+  a freehand magnitude map.
 
 ### Fourier Image → Audio
 
 ```
 image → read AF header if present, otherwise use defaults
-      → smooth R/G magnitude over nearby pixels
+      → read R magnitude and G/B phase vectors
       → map log-frequency image rows back to FFT bins
-      → rebuild phase deterministically
       → inverse FFT + overlap-add → normalize → WAV
 ```
 
@@ -140,8 +142,8 @@ drawable frequency map.
 
 The Python CLI `audio2img` / `img2audio` path is the older phase-preserving
 spectral codec and uses an `AU` row header. The web Fourier mode uses `AF` and
-magnitude-only reconstruction because that is more tolerant of compression,
-noise, resizing, and hand editing.
+phase-vector reconstruction for `AF` images, with a magnitude-only fallback for
+freehand images.
 
 ### Image → Image-In-Image
 
@@ -210,7 +212,7 @@ stenograph/
 | Encrypted image | PNG, RGB | None | Pure pixel data |
 | Text-as-image | PNG, binary 88/168 | `TX` in pixels | 25× redundant, CRC32 |
 | Audio-as-image | PNG, 16-bit PCM bytes | length header | Exact PNG-only web mode |
-| Fourier audio image | PNG, spectral magnitude | `AF` in pixels | Robust/editable web mode |
+| Fourier audio image | PNG, magnitude + phase vector | `AF` in pixels | Robust/editable web mode |
 | CLI spectral audio | PNG, magnitude+phase | `AU` in row 0 | Python phase-preserving mode |
 | Image-in-image | PNG, LSB RGB | `SIMG` footer | 1-4 low bits/channel |
 
