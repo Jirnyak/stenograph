@@ -1,7 +1,9 @@
 import {
   generateKeyPair, loadImageFile, loadAudioFile, rgbToBlob, multiply,
   textToRGB, rgbToText, rgbToRawText, audioToRGB, rgbToAudio, toWavBlob,
+  hideImageInImage, revealImageFromImageInfo,
 } from './steno.js';
+import { audioToFourierRGB, fourierRGBToAudio } from './audio-fourier.js';
 import { extractFromPhoto } from './extract.js';
 
 const $ = s => document.querySelector(s);
@@ -11,16 +13,24 @@ const tick = () => new Promise(r => setTimeout(r, 10));
 
 const dropFile   = $('#drop-file');
 const dropKey    = $('#drop-key');
+const dropCover  = $('#drop-cover');
 const fileInput  = $('#file-input');
 const keyInput   = $('#key-input');
+const coverInput = $('#cover-input');
 const textInput  = $('#text-input');
 const fileLbl    = $('#file-label');
 const fileHint   = $('#file-hint');
 const keyLbl     = $('#key-label');
 const keyHint    = $('#key-hint');
+const coverLbl   = $('#cover-label');
+const coverHint  = $('#cover-hint');
+const hideBits   = $('#hide-bits');
+const audioMode  = $('#audio-mode');
 const btnToImg   = $('#btn-to-img');
 const btnFromImg = $('#btn-from-img');
 const btnMul     = $('#btn-multiply');
+const btnHide    = $('#btn-hide-image');
+const btnReveal  = $('#btn-reveal-image');
 const btnExtract = $('#btn-extract');
 const btnKeygen  = $('#btn-keygen');
 const statusEl   = $('#status');
@@ -41,7 +51,9 @@ const audioEl    = $('#audio-player');
 
 let fileRGB = null;
 let keyRGB  = null;
+let coverRGB = null;
 let rawSourceImg = null; // original Image element for extract
+let sourceAudio = null;
 
 function setStatus(msg, type = '') {
   statusEl.textContent = msg;
@@ -96,6 +108,35 @@ function download(blob, name) {
   URL.revokeObjectURL(a.href);
 }
 
+function getHideBits() {
+  if (hideBits.value === 'auto') return 4;
+  const n = Number(hideBits.value) | 0;
+  return Math.max(1, Math.min(4, n || 4));
+}
+
+function getRevealBits() {
+  if (hideBits.value === 'auto') return 0;
+  return getHideBits();
+}
+
+async function ensureSourceRGB(message = 'Drop a file or type text') {
+  const txt = textInput.value.trim();
+  if (txt && !fileRGB) {
+    sourceAudio = null;
+    setStatus('Encoding text...', '');
+    await tick();
+    fileRGB = await textToRGB(txt);
+    fileLbl.textContent = 'typed text';
+    fileHint.textContent = 'text -> 1024x1024';
+    dropFile.classList.add('loaded');
+  }
+  if (!fileRGB) {
+    setStatus(message, 'err');
+    return false;
+  }
+  return true;
+}
+
 // ─── File classification & loading ──────────────────────────────────────────
 
 function classifyFile(file) {
@@ -105,9 +146,26 @@ function classifyFile(file) {
   return 'text';
 }
 
+function getAudioModeName() {
+  return audioMode.value === 'fourier' ? 'Fourier' : 'PCM';
+}
+
+async function encodeSourceAudio() {
+  if (!sourceAudio) return;
+  const fourier = audioMode.value === 'fourier';
+  setStatus(fourier ? 'Drawing Fourier audio...' : 'Encoding PCM audio...', '');
+  await tick();
+  fileRGB = fourier
+    ? audioToFourierRGB(sourceAudio.samples, sourceAudio.sampleRate)
+    : audioToRGB(sourceAudio.samples, sourceAudio.sampleRate);
+  fileHint.textContent = `audio/${audioMode.value} -> 1024x1024`;
+}
+
 async function onFile(file) {
   const type = classifyFile(file);
   try {
+    rawSourceImg = null;
+    sourceAudio = null;
     if (type === 'image') {
       setStatus('Loading image...', '');
       fileRGB = await loadImageFile(file);
@@ -116,18 +174,17 @@ async function onFile(file) {
     } else if (type === 'audio') {
       setStatus('Decoding audio...', '');
       const samples = await loadAudioFile(file);
-      setStatus('FFT...', '');
-      await tick();
-      fileRGB = audioToRGB(samples);
+      sourceAudio = { samples, sampleRate: 22050 };
+      await encodeSourceAudio();
     } else {
       setStatus('Encoding text...', '');
       const text = await file.text();
       fileRGB = await textToRGB(text);
     }
     fileLbl.textContent = file.name;
-    fileHint.textContent = `${type} → 1024×1024`;
+    fileHint.textContent = `${type} -> 1024x1024`;
     dropFile.classList.add('loaded');
-    setStatus(`Loaded: ${file.name}`, 'ok');
+    setStatus(type === 'audio' ? `Loaded: ${file.name} (${getAudioModeName()})` : `Loaded: ${file.name}`, 'ok');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'err');
     console.error(e);
@@ -136,7 +193,7 @@ async function onFile(file) {
 
 async function onKey(file) {
   try {
-    keyRGB = await loadImageFile(file);
+    keyRGB = await loadImageFile(file, 'stretch');
     keyLbl.textContent = file.name;
     keyHint.textContent = '1024×1024';
     dropKey.classList.add('loaded');
@@ -147,24 +204,29 @@ async function onKey(file) {
   }
 }
 
+async function onCover(file) {
+  try {
+    setStatus('Loading cover image...', '');
+    coverRGB = await loadImageFile(file);
+    coverLbl.textContent = file.name;
+    coverHint.textContent = 'cover -> 1024x1024';
+    dropCover.classList.add('loaded');
+    setStatus(`Cover: ${file.name}`, 'ok');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'err');
+    console.error(e);
+  }
+}
+
 // ─── Actions ────────────────────────────────────────────────────────────────
 
 /** → Image: any input → 1024×1024 PNG. That's it. */
 async function doToImage() {
   clearOutput();
-  const txt = textInput.value.trim();
-  if (txt && !fileRGB) {
-    setStatus('Encoding text...', '');
-    await tick();
-    fileRGB = await textToRGB(txt);
-    fileLbl.textContent = 'typed text';
-    fileHint.textContent = 'text → 1024×1024';
-    dropFile.classList.add('loaded');
-  }
-  if (!fileRGB) { setStatus('Drop a file or type text', 'err'); return; }
+  if (!(await ensureSourceRGB())) return;
 
   await showRGB(fileRGB, 'encoded.png');
-  setStatus('→ Image: 1024×1024', 'ok');
+  setStatus('To image: 1024x1024', 'ok');
 }
 
 /** ← Image: take image, blindly run ALL decoders. Show all 3 outputs. */
@@ -182,12 +244,14 @@ async function doFromImage() {
     showText(text || rgbToRawText(fileRGB));
 
     // 3. Audio — blindly run iFFT, always works
-    setStatus('Decoding audio...', '');
+    setStatus(`Decoding ${getAudioModeName()} audio...`, '');
     await tick();
-    const audio = rgbToAudio(fileRGB);
+    const audio = audioMode.value === 'fourier'
+      ? fourierRGBToAudio(fileRGB)
+      : rgbToAudio(fileRGB);
     showAudio(audio.samples, audio.sampleRate);
 
-    setStatus('← Image: all outputs', 'ok');
+    setStatus(`From image: all outputs (${getAudioModeName()} audio)`, 'ok');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'err');
     console.error(e);
@@ -197,11 +261,7 @@ async function doFromImage() {
 /** × Key: image × key → image. Pure multiply. */
 async function doMultiply() {
   clearOutput();
-  const txt = textInput.value.trim();
-  if (txt && !fileRGB) {
-    fileRGB = await textToRGB(txt);
-  }
-  if (!fileRGB) { setStatus('Drop a file', 'err'); return; }
+  if (!(await ensureSourceRGB('Drop a file'))) return;
   if (!keyRGB) { setStatus('Drop a key image', 'err'); return; }
 
   try {
@@ -210,6 +270,54 @@ async function doMultiply() {
     const result = multiply(fileRGB, keyRGB);
     await showRGB(result, 'multiplied.png');
     setStatus('× Key: done', 'ok');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'err');
+    console.error(e);
+  }
+}
+
+/** Hide current image/file image inside cover image. */
+async function doHideImage() {
+  clearOutput();
+  if (!(await ensureSourceRGB('Drop a secret image/file or type text'))) return;
+  if (!coverRGB) { setStatus('Drop a cover image', 'err'); return; }
+
+  try {
+    const bits = getHideBits();
+    setStatus('Hiding image in cover...', '');
+    await tick();
+    const result = hideImageInImage(coverRGB, fileRGB, bits);
+    await showRGB(result, 'hidden-in-cover.png');
+    setStatus(`Hidden in cover with ${bits} low bits + SIMG footer. Keep PNG.`, 'ok');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'err');
+    console.error(e);
+  }
+}
+
+/** Reveal image hidden in the low bits of the loaded image. */
+async function doRevealImage() {
+  clearOutput();
+  if (!fileRGB) { setStatus('Drop a stego PNG first', 'err'); return; }
+
+  try {
+    const requestedBits = getRevealBits();
+    setStatus('Revealing hidden image...', '');
+    await tick();
+    const info = revealImageFromImageInfo(fileRGB, requestedBits);
+    const result = info.rgb;
+    fileRGB = result;
+    rawSourceImg = null;
+    fileLbl.textContent = 'revealed image';
+    fileHint.textContent = 'hidden -> 1024x1024';
+    dropFile.classList.add('loaded');
+    await showRGB(result, 'revealed.png');
+    if (info.detected && info.verified)
+      setStatus(`Hidden image revealed: ${info.bits} bits, checksum ok`, 'ok');
+    else if (info.detected)
+      setStatus(`Hidden image revealed: ${info.bits} bits, checksum mismatch`, 'err');
+    else
+      setStatus(`Hidden image revealed: ${info.bits} bits, legacy/no footer`, 'ok');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'err');
     console.error(e);
@@ -277,6 +385,8 @@ async function doExtract() {
 btnToImg.onclick = doToImage;
 btnFromImg.onclick = doFromImage;
 btnMul.onclick = doMultiply;
+btnHide.onclick = doHideImage;
+btnReveal.onclick = doRevealImage;
 btnExtract.onclick = doExtract;
 btnKeygen.onclick = doKeygen;
 
@@ -292,6 +402,17 @@ function setupDrop(zone, input, handler) {
 
 setupDrop(dropFile, fileInput, onFile);
 setupDrop(dropKey, keyInput, onKey);
+setupDrop(dropCover, coverInput, onCover);
+audioMode.addEventListener('change', async () => {
+  if (!sourceAudio) return;
+  try {
+    await encodeSourceAudio();
+    setStatus(`Audio mode: ${getAudioModeName()}`, 'ok');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'err');
+    console.error(e);
+  }
+});
 textInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); doToImage(); }
 });

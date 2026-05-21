@@ -22,14 +22,42 @@
       <span id="key-hint" class="hint">PNG image</span>
       <input type="file" id="key-input" accept="image/png" hidden />
     </label>
+    <label class="zone" id="drop-cover">
+      <span class="zone-icon">IMG</span>
+      <span id="cover-label">Drop cover</span>
+      <span id="cover-hint" class="hint">image carrier</span>
+      <input type="file" id="cover-input" accept="image/*" hidden />
+    </label>
   </div>
 
   <textarea id="text-input" rows="3" placeholder="or type text here (Ctrl+Enter = encode)"></textarea>
 
+  <div class="options">
+    <label>
+      Audio mode
+      <select id="audio-mode">
+        <option value="pcm" selected>PCM exact</option>
+        <option value="fourier">Fourier robust</option>
+      </select>
+    </label>
+    <label>
+      Hide depth
+      <select id="hide-bits">
+        <option value="auto" selected>Auto / 4 bits</option>
+        <option value="4">4 bits</option>
+        <option value="3">3 bits</option>
+        <option value="2">2 bits</option>
+        <option value="1">1 bit</option>
+      </select>
+    </label>
+  </div>
+
   <div class="actions">
     <button id="btn-to-img">→ Image</button>
     <button id="btn-from-img">← Image</button>
-    <button id="btn-multiply">× Key</button>
+    <button id="btn-multiply" disabled>× Key</button>
+    <button id="btn-hide-image">Hide in Cover</button>
+    <button id="btn-reveal-image">Reveal Hidden</button>
     <button id="btn-extract">Extract</button>
     <button id="btn-keygen">Key Gen</button>
   </div>

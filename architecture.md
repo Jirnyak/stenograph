@@ -92,32 +92,81 @@ image → for each bit: sum luminance(pixel - 128) across 25 spatial copies
 
 Falls back to raw ASCII extraction if no magic found.
 
-### Audio → Image
+### Audio → Image (PCM Exact Mode)
 
 ```
-audio → load/resample to 22050 Hz mono → reshape to (N-1) × N frames
-      → FFT per frame → log-magnitude (R), phase (G), RMS envelope (B)
-      → log-frequency mapping (even distribution across pixels)
-      → fixed scaling ranges (no per-image params needed)
-      → row 0: binary-encoded [AU magic + sample_rate + sample_count]
+audio → load/resample to 22050 Hz mono
+      → normalize → 16-bit PCM bytes
+      → spatially interleave bytes after a redundant length header
+      → save 1024×1024 PNG
+```
+
+- Web default mode.
+- Good for PNG-only round trips where the goal is recognizable source audio.
+- Header stores original sample count and stored sample count in repeated pixels.
+- This is a byte carrier, not a visual music representation.
+- Lossy image edits, JPEG, strong noise, or resizing corrupt samples directly.
+
+### Audio → Fourier Image (Robust Mode)
+
+```
+audio → load/resample to 22050 Hz mono → 1024 Hann-windowed frames
+      → FFT per frame → log-magnitude on a log-frequency image grid
+      → R/G = redundant magnitude, B = broadband envelope
+      → rows 0..3: redundant AF header in pixels
       → save N×N PNG
 ```
 
-Fixed scaling ranges (no stored parameters):
-- Magnitude: `[0, 20]` (log1p scale)
-- Phase: `[-π, π]`
-- RMS: `[0, 1]`
+- Alternative web mode selected as `Fourier robust`.
+- Fixed frame size 1024, hop 512, 1024 frames: about 23.8 seconds at 22050 Hz.
+- Longer audio is resampled into the available time grid; shorter audio is padded.
+- Magnitude uses a fixed `log1p` range. No per-file metadata is needed for scale.
+- Phase is not stored. It is regenerated with deterministic phase continuation.
+- JPEG/noise/resize damage becomes spectral blur instead of byte corruption.
+- Drawing a horizontal bright line creates a tone; vertical marks create attacks.
 
-### Image → Audio
+### Fourier Image → Audio
 
 ```
-image → check row 0 for AU magic → extract sr, n_samples
-      → rows 1+: decode R→magnitude, G→phase using fixed ranges
-      → log-frequency map interpolation to full spectrum
-      → inverse FFT per row → concatenate → normalize → WAV
+image → read AF header if present, otherwise use defaults
+      → smooth R/G magnitude over nearby pixels
+      → map log-frequency image rows back to FFT bins
+      → rebuild phase deterministically
+      → inverse FFT + overlap-add → normalize → WAV
 ```
 
-Works on ANY image (uses defaults if no audio magic found).
+Works on any image. Without an `AF` header the whole image is treated as a
+drawable frequency map.
+
+The Python CLI `audio2img` / `img2audio` path is the older phase-preserving
+spectral codec and uses an `AU` row header. The web Fourier mode uses `AF` and
+magnitude-only reconstruction because that is more tolerant of compression,
+noise, resizing, and hand editing.
+
+### Image → Image-In-Image
+
+```
+cover.png + secret.png → fit both into 1024×1024 RGB
+                        → replace cover low bits with secret high bits
+                        → write SIMG footer in final low-bit cells
+                        → hidden-in-cover.png
+```
+
+- Default depth is 4 low bits per channel.
+- More bits give a clearer recovered image and more visible carrier changes.
+- The output must stay PNG or another lossless format; JPEG destroys the low bits.
+- A 12-byte in-pixel `SIMG` footer stores version, bit depth, and CRC32.
+- Old no-footer images still reveal with an explicit bit depth or the 4-bit fallback.
+
+### Image-In-Image → Image
+
+```
+hidden-in-cover.png → read SIMG footer → choose bit depth
+                    → read low bits → verify CRC32 → revealed.png
+```
+
+The recovered image is quantized by the chosen bit depth. At 4 bits it is
+recognizable and useful for visual payloads, not a perfect copy.
 
 ## Key Management
 
@@ -148,6 +197,7 @@ stenograph/
     ├── index.html
     └── src/
         ├── steno.js     # Core math (JS port)
+        ├── audio-fourier.js # Robust editable Fourier audio codec
         ├── main.js      # UI logic
         └── style.css    # Minimal dark theme
 ```
@@ -159,6 +209,9 @@ stenograph/
 | Key | `.npy` float64 `(3,B,B)` | numpy header | Separate file |
 | Encrypted image | PNG, RGB | None | Pure pixel data |
 | Text-as-image | PNG, binary 88/168 | `TX` in pixels | 25× redundant, CRC32 |
-| Audio-as-image | PNG, spectral | `AU` in row 0 | Self-contained |
+| Audio-as-image | PNG, 16-bit PCM bytes | length header | Exact PNG-only web mode |
+| Fourier audio image | PNG, spectral magnitude | `AF` in pixels | Robust/editable web mode |
+| CLI spectral audio | PNG, magnitude+phase | `AU` in row 0 | Python phase-preserving mode |
+| Image-in-image | PNG, LSB RGB | `SIMG` footer | 1-4 low bits/channel |
 
 **Zero metadata in any output PNG.** All information lives in pixel values.

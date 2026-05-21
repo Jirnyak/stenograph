@@ -19,6 +19,8 @@ Usage:
     python steno.py img2audio image.png [out.wav]   # image → audio
     python steno.py text2img "hello" [output]       # text → image
     python steno.py img2text image.png              # image → text
+    python steno.py hideimg cover.png secret.png [output] [bits]
+    python steno.py revealimg stego.png [output] [bits|auto]
 """
 
 import sys, os, struct, zlib
@@ -36,9 +38,16 @@ LOG_MAG_MAX = 20.0
 
 TEXT_MAGIC  = b"TX"         # in-pixel marker for text content
 AUDIO_MAGIC = b"AU"         # in-pixel marker for audio content
+IMG_MAGIC   = b"SIMG"       # in-pixel footer for image-in-image content
 BIT_ZERO    = 88            # pixel value for bit=0 (centered ±40 from 128)
 BIT_ONE     = 168           # pixel value for bit=1 (survives JPEG + cipher)
 TEXT_REPS   = 25            # spatial repetition factor for noise resilience
+
+IMG_HIDE_VERSION      = 1
+IMG_HIDE_HEADER_BYTES = 12
+IMG_HIDE_HEADER_REPS  = 9
+IMG_HIDE_HEADER_BITS  = IMG_HIDE_HEADER_BYTES * 8
+IMG_HIDE_HEADER_SPAN  = IMG_HIDE_HEADER_BITS * IMG_HIDE_HEADER_REPS
 
 # Primes for spatial interleaving (all coprime to IMG_SIZE² // TEXT_REPS)
 _TEXT_PRIMES = [104729, 7919, 65537, 15485863, 324517, 49979687, 611953,
@@ -103,6 +112,17 @@ def _ensure_rgb(img):
         img = np.stack([img] * 3, -1)
     return img[:, :, :3]
 
+def _resize_rgb(img, size=IMG_SIZE):
+    img = _ensure_rgb(img)
+    if img.shape[0] == size and img.shape[1] == size:
+        return img
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    src = Image.fromarray(img).convert("RGB")
+    src.thumbnail((size, size), resample)
+    dst = Image.new("RGB", (size, size), (128, 128, 128))
+    dst.paste(src, ((size - src.width) // 2, (size - src.height) // 2))
+    return np.array(dst)
+
 def _pad(img, B):
     h, w = img.shape[:2]
     ph, pw = (B - h % B) % B, (B - w % B) % B
@@ -158,6 +178,84 @@ def decrypt_image(path, output=None):
     out = output or _outname(path, "_dec")
     save_png(out, dec)
     print(f"Decrypted: {out} ({dec.shape[1]}×{dec.shape[0]})")
+
+# ─── Image inside image (LSB steganography) ─────────────────────────────────
+
+def _check_bits(bits):
+    if bits is None or str(bits).lower() == "auto":
+        return 4
+    bits = int(bits)
+    if bits < 1 or bits > 4:
+        raise ValueError("bits must be 1..4")
+    return bits
+
+def _image_hide_header_start(total):
+    if total <= IMG_HIDE_HEADER_SPAN:
+        raise ValueError("image too small for SIMG footer")
+    return total - IMG_HIDE_HEADER_SPAN
+
+def _make_image_hide_header(bits, crc):
+    return IMG_MAGIC + bytes([IMG_HIDE_VERSION, bits, 0, 0]) + struct.pack("<I", crc)
+
+def _write_image_hide_header(flat, bits, crc):
+    header = _make_image_hide_header(bits, crc)
+    start = _image_hide_header_start(flat.size)
+    bits_arr = np.unpackbits(np.frombuffer(header, np.uint8))
+    for i, bit in enumerate(bits_arr):
+        base = start + i * IMG_HIDE_HEADER_REPS
+        flat[base:base + IMG_HIDE_HEADER_REPS] = (flat[base:base + IMG_HIDE_HEADER_REPS] & 0xFE) | bit
+
+def _read_image_hide_header(flat):
+    start = _image_hide_header_start(flat.size)
+    bits = np.zeros(IMG_HIDE_HEADER_BITS, np.uint8)
+    for i in range(IMG_HIDE_HEADER_BITS):
+        base = start + i * IMG_HIDE_HEADER_REPS
+        bits[i] = int(np.count_nonzero(flat[base:base + IMG_HIDE_HEADER_REPS] & 1) >= 5)
+
+    header = np.packbits(bits).tobytes()[:IMG_HIDE_HEADER_BYTES]
+    if header[:4] != IMG_MAGIC or header[4] != IMG_HIDE_VERSION:
+        return None
+    if header[5] < 1 or header[5] > 4:
+        return None
+    return {"bits": header[5], "crc": struct.unpack("<I", header[8:12])[0]}
+
+def hide_image(cover_path, secret_path, output=None, bits=4):
+    """Hide one image inside another. Output must be kept as PNG."""
+    bits = _check_bits(bits)
+    cover = _resize_rgb(load_png(cover_path))
+    secret = _resize_rgb(load_png(secret_path))
+    payload_end = _image_hide_header_start(cover.size)
+    low_mask = (1 << bits) - 1
+    keep_mask = 0xFF ^ low_mask
+    hidden = (secret >> (8 - bits)).astype(np.uint8)
+    stego = ((cover & keep_mask) | hidden).astype(np.uint8)
+    crc = zlib.crc32(hidden.reshape(-1)[:payload_end].tobytes()) & 0xFFFFFFFF
+    _write_image_hide_header(stego.reshape(-1), bits, crc)
+
+    out = output or _outname(cover_path, "_hidden", ".png")
+    save_png(out, stego)
+    print(f"Image hidden: {out} ({bits} low bits, SIMG footer, PNG only)")
+
+def reveal_image(stego_path, output=None, bits="auto"):
+    """Reveal an image hidden by hide_image()."""
+    stego = _ensure_rgb(load_png(stego_path))
+    flat = stego.reshape(-1)
+    header = _read_image_hide_header(flat)
+    auto = bits is None or str(bits).lower() == "auto" or str(bits) == "0"
+    bits = header["bits"] if auto and header else _check_bits(bits)
+    payload_end = _image_hide_header_start(flat.size)
+    low_mask = (1 << bits) - 1
+    hidden = (stego.astype(np.uint16) & low_mask).astype(np.uint8)
+    secret = np.round(hidden.astype(np.uint16) * 255 / low_mask).astype(np.uint8)
+
+    out = output or _outname(stego_path, "_revealed", ".png")
+    save_png(out, secret)
+    if header and header["bits"] == bits:
+        crc = zlib.crc32(hidden.reshape(-1)[:payload_end].tobytes()) & 0xFFFFFFFF
+        verdict = "checksum ok" if crc == header["crc"] else "checksum mismatch"
+    else:
+        verdict = "legacy/no footer"
+    print(f"Image revealed: {out} ({bits} low bits, {verdict})")
 
 # ─── Audio ↔ Image ──────────────────────────────────────────────────────────
 
@@ -284,8 +382,8 @@ def image_to_audio(img_path, output=None):
 # ─── Text ↔ Image ────────────────────────────────────────────────────────────
 
 def text_to_image(text, output="text.png", N=IMG_SIZE):
-    """Text → image: zlib compressed, 15× spatially interleaved, R=G=B.
-    Each bit stored at 15 different positions × 3 channels = 45 copies.
+    """Text → image: zlib compressed, 25× spatially interleaved, R=G=B.
+    Each bit stored at 25 different positions × 3 channels = 75 copies.
     Survives JPEG compression + matrix cipher round-trip."""
     raw = text.encode('utf-8')
     comp = zlib.compress(raw, 9)
@@ -322,7 +420,7 @@ def text_to_image(text, output="text.png", N=IMG_SIZE):
     print(f"Text → Image: {output} ({N}×{N}, {len(raw)}B → {len(comp)}B, {TEXT_REPS}× redundant)")
 
 def image_to_text(path):
-    """Extract text using soft voting: sum(pixel - 128) across 3 channels × 15 positions."""
+    """Extract text using soft voting: sum(pixel - 128) across 3 channels × 25 positions."""
     img = _ensure_rgb(load_png(path))
     N = img.shape[0]
     n_pixels = N * N
@@ -387,6 +485,23 @@ def _outname(p, suffix, ext=None):
     b, e = os.path.splitext(p)
     return b + suffix + (ext or e)
 
+def _is_int(s):
+    try:
+        int(s)
+        return True
+    except ValueError:
+        return False
+
+def _is_bits_arg(s):
+    return str(s).lower() == "auto" or _is_int(s)
+
+def _out_bits(args, default_bits=4):
+    if not args:
+        return None, default_bits
+    if len(args) == 1 and _is_bits_arg(args[0]):
+        return None, args[0]
+    return args[0], args[1] if len(args) > 1 else default_bits
+
 CMDS = {
     "keygen":    "Generate orthogonal key pair",
     "encrypt":   "Encrypt image:  encrypt <img> [out]",
@@ -395,6 +510,8 @@ CMDS = {
     "img2audio": "Image → Audio:  img2audio <img> [out.wav]",
     "text2img":  "Text → Image:   text2img <text|file> [out]",
     "img2text":  "Image → Text:   img2text <img>",
+    "hideimg":   "Hide image:     hideimg <cover> <secret> [out] [bits]",
+    "revealimg": "Reveal image:   revealimg <stego> [out] [bits|auto]",
 }
 
 def main():
@@ -424,6 +541,12 @@ def main():
     elif cmd == "img2text":
         print("─" * 40)
         print(image_to_text(args[0]))
+    elif cmd == "hideimg":
+        output, bits = _out_bits(args[2:], 4)
+        hide_image(args[0], args[1], output, bits)
+    elif cmd == "revealimg":
+        output, bits = _out_bits(args[1:], "auto")
+        reveal_image(args[0], output, bits)
 
 if __name__ == "__main__":
     main()

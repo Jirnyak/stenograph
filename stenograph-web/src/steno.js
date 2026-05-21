@@ -55,11 +55,20 @@ function makeCanvas(w, h) {
 }
 
 /** Any RGBA + dimensions → 1024×1024 RGB (Uint8Array) */
-function toN(rgba, w, h) {
+function toN(rgba, w, h, fit = 'contain') {
   const { canvas: src, ctx: sctx } = makeCanvas(w, h);
   sctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), w, h), 0, 0);
   const { canvas: dst, ctx: dctx } = makeCanvas(N, N);
-  dctx.drawImage(src, 0, 0, N, N);
+  dctx.fillStyle = 'rgb(128,128,128)';
+  dctx.fillRect(0, 0, N, N);
+  if (fit === 'stretch') {
+    dctx.drawImage(src, 0, 0, N, N);
+  } else {
+    const scale = Math.min(N / w, N / h);
+    const dw = Math.round(w * scale);
+    const dh = Math.round(h * scale);
+    dctx.drawImage(src, (N - dw) >> 1, (N - dh) >> 1, dw, dh);
+  }
   const d = dctx.getImageData(0, 0, N, N).data;
   const rgb = new Uint8Array(N * N * 3);
   for (let i = 0; i < N * N; i++) {
@@ -90,14 +99,14 @@ export function rgbToBlob(rgb) {
 }
 
 /** File (image) → 1024×1024 RGB */
-export function loadImageFile(file) {
+export function loadImageFile(file, fit = 'contain') {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       const { canvas, ctx } = makeCanvas(img.width, img.height);
       ctx.drawImage(img, 0, 0);
       const d = ctx.getImageData(0, 0, img.width, img.height).data;
-      resolve(toN(d, img.width, img.height));
+      resolve(toN(d, img.width, img.height, fit));
       URL.revokeObjectURL(img.src);
     };
     img.onerror = () => reject(new Error('Cannot load image'));
@@ -346,6 +355,112 @@ export function multiply(imageRGB, keyRGB) {
   }
 
   return out;
+}
+
+// ─── Image inside image (LSB steganography) ─────────────────────────────────
+
+const IMG_HIDE_MAGIC = [0x53, 0x49, 0x4D, 0x47]; // SIMG
+const IMG_HIDE_VERSION = 1;
+const IMG_HIDE_HEADER_BYTES = 12;
+const IMG_HIDE_HEADER_REPS = 9;
+const IMG_HIDE_HEADER_BITS = IMG_HIDE_HEADER_BYTES * 8;
+const IMG_HIDE_HEADER_SPAN = IMG_HIDE_HEADER_BITS * IMG_HIDE_HEADER_REPS;
+const IMG_HIDE_PAYLOAD_END = T - IMG_HIDE_HEADER_SPAN;
+
+function checkedBits(bits) {
+  const n = bits | 0;
+  if (n < 1 || n > 4) throw new Error('Bit depth must be 1..4');
+  return n;
+}
+
+function checkedRGB(rgb) {
+  if (!rgb || rgb.length !== T) throw new Error('Image must be 1024x1024 RGB');
+}
+
+function makeImageHideHeader(bits, crc) {
+  const h = new Uint8Array(IMG_HIDE_HEADER_BYTES);
+  h.set(IMG_HIDE_MAGIC, 0);
+  h[4] = IMG_HIDE_VERSION;
+  h[5] = bits;
+  const dv = new DataView(h.buffer);
+  dv.setUint32(8, crc, true);
+  return h;
+}
+
+function writeImageHideHeader(rgb, bits, crc) {
+  const h = makeImageHideHeader(bits, crc);
+  for (let i = 0; i < IMG_HIDE_HEADER_BITS; i++) {
+    const v = (h[i >> 3] >> (7 - (i & 7))) & 1;
+    const base = IMG_HIDE_PAYLOAD_END + i * IMG_HIDE_HEADER_REPS;
+    for (let r = 0; r < IMG_HIDE_HEADER_REPS; r++)
+      rgb[base + r] = (rgb[base + r] & 0xFE) | v;
+  }
+}
+
+function readImageHideHeader(rgb) {
+  const h = new Uint8Array(IMG_HIDE_HEADER_BYTES);
+  for (let i = 0; i < IMG_HIDE_HEADER_BITS; i++) {
+    const base = IMG_HIDE_PAYLOAD_END + i * IMG_HIDE_HEADER_REPS;
+    let votes = 0;
+    for (let r = 0; r < IMG_HIDE_HEADER_REPS; r++) votes += rgb[base + r] & 1;
+    if (votes >= 5) h[i >> 3] |= 1 << (7 - (i & 7));
+  }
+  for (let i = 0; i < IMG_HIDE_MAGIC.length; i++)
+    if (h[i] !== IMG_HIDE_MAGIC[i]) return null;
+  if (h[4] !== IMG_HIDE_VERSION || h[5] < 1 || h[5] > 4) return null;
+  return { bits: h[5], crc: new DataView(h.buffer).getUint32(8, true) };
+}
+
+/**
+ * Hide one 1024x1024 RGB image inside another.
+ * Stores the secret high bits in the cover low bits. Save as PNG.
+ * A tiny SIMG footer stores bit depth + CRC inside pixels, not metadata.
+ */
+export function hideImageInImage(coverRGB, secretRGB, bits = 4) {
+  checkedRGB(coverRGB);
+  checkedRGB(secretRGB);
+  const n = checkedBits(bits);
+  const lowMask = (1 << n) - 1;
+  const keepMask = 0xFF ^ lowMask;
+  const shift = 8 - n;
+  const out = new Uint8Array(T);
+  const payload = new Uint8Array(IMG_HIDE_PAYLOAD_END);
+
+  for (let i = 0; i < T; i++) {
+    const hidden = secretRGB[i] >> shift;
+    out[i] = (coverRGB[i] & keepMask) | hidden;
+    if (i < IMG_HIDE_PAYLOAD_END) payload[i] = hidden;
+  }
+  writeImageHideHeader(out, n, crc32(payload));
+
+  return out;
+}
+
+/** Reveal an image hidden with hideImageInImage(). Returns pixels + diagnostics. */
+export function revealImageFromImageInfo(stegoRGB, bits = 0) {
+  checkedRGB(stegoRGB);
+  const header = readImageHideHeader(stegoRGB);
+  const auto = bits === undefined || bits === null || bits === 0 || bits === 'auto';
+  const n = auto && header ? header.bits : checkedBits(auto ? 4 : bits);
+  const lowMask = (1 << n) - 1;
+  const out = new Uint8Array(T);
+  const payload = header && header.bits === n ? new Uint8Array(IMG_HIDE_PAYLOAD_END) : null;
+
+  for (let i = 0; i < T; i++) {
+    const hidden = stegoRGB[i] & lowMask;
+    out[i] = Math.round(hidden * 255 / lowMask);
+    if (payload && i < IMG_HIDE_PAYLOAD_END) payload[i] = hidden;
+  }
+
+  let verified = false;
+  if (payload) verified = crc32(payload) === header.crc;
+
+  return { rgb: out, bits: n, detected: !!header, verified };
+}
+
+/** Reveal an image hidden with hideImageInImage(). */
+export function revealImageFromImage(stegoRGB, bits = 0) {
+  return revealImageFromImageInfo(stegoRGB, bits).rgb;
 }
 
 // ─── Text → Image (dumb, no magic) ─────────────────────────────────────────
