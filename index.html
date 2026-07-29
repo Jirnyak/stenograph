@@ -3,33 +3,509 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>stenograph — Official Technical Showcase</title>
-    <meta name="description" content="Cryptographic data hiding and steganography analysis.">
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700;900&display=swap" rel="stylesheet">
+    <meta name="description" content="Stenograph - Technical System Architecture & Specification. A small steganography and image-cipher playground.">
+    <title>Stenograph | Cryptography & Steganography</title>
+    <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Fira+Code:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #0f172a; --accent: #64748b; }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: var(--bg); color: #f1f5f9; font-family: 'Fira Code', sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; overflow-x: hidden; }
-        .hero-box { max-width: 900px; width: 100%; text-align: center; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 3rem 2rem; backdrop-filter: blur(10px); box-shadow: 0 0 50px rgba(0,0,0,0.8), 0 0 30px var(--accent); }
-        h1 { font-size: 3.5rem; font-weight: 900; color: #fff; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 0.5rem; text-shadow: 0 0 20px var(--accent); }
-        .tag { display: inline-block; background: rgba(255,255,255,0.05); border: 1px solid var(--accent); color: var(--accent); font-weight: 700; padding: 0.4rem 1.2rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 1.5rem; letter-spacing: 1px; }
-        p.desc { font-size: 1.2rem; color: #94a3b8; max-width: 700px; margin: 0 auto 2.5rem; line-height: 1.6; }
-        .btn-group { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-        .btn { padding: 1rem 2.2rem; background: var(--accent); color: #000; font-weight: 700; text-decoration: none; border-radius: 6px; font-size: 1rem; transition: all 0.3s; text-transform: uppercase; }
-        .btn:hover { background: #fff; box-shadow: 0 0 30px #fff; transform: translateY(-2px); }
-        .btn-sec { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.2); }
-        .btn-sec:hover { background: rgba(255,255,255,0.1); }
+        :root {
+            --bg-color: #1a1a1a;
+            --surface-color: rgba(45, 45, 45, 0.4);
+            --surface-border: rgba(255, 255, 255, 0.1);
+            --text-primary: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --accent: #ff4b4b; /* Typewriter ribbon red */
+            --glass-blur: blur(12px);
+            --font-mono: 'Fira Code', 'Courier New', Courier, monospace;
+            --font-typewriter: 'Courier Prime', 'Courier New', Courier, monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            cursor: default;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            line-height: 1.6;
+            overflow-x: hidden;
+            position: relative;
+            background-image: 
+                url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.04'/%3E%3C/svg%3E"),
+                radial-gradient(circle at 50% 0%, #2a2a2a 0%, #1a1a1a 70%);
+            background-attachment: fixed;
+        }
+
+        /* Scanline effect */
+        body::before {
+            content: " ";
+            display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(
+                to bottom,
+                rgba(18, 16, 16, 0) 50%,
+                rgba(0, 0, 0, 0.1) 50%
+            );
+            background-size: 100% 4px;
+            z-index: 50;
+            pointer-events: none;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 4rem 2rem;
+            position: relative;
+            z-index: 10;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 5rem;
+            animation: fadeInDown 1.5s cubic-bezier(0.19, 1, 0.22, 1);
+        }
+
+        .typewriter h1 {
+            font-family: var(--font-typewriter);
+            font-size: 4rem;
+            font-weight: 700;
+            letter-spacing: -2px;
+            color: #ffffff;
+            position: relative;
+            display: inline-block;
+            margin-bottom: 1rem;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+        }
+
+        .typewriter h1::after {
+            content: '_';
+            position: absolute;
+            right: -1.2rem;
+            animation: blink 1s step-start infinite;
+            color: var(--accent);
+        }
+
+        header p {
+            font-size: 1.2rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* Glassmorphism Cards */
+        .glass-card {
+            background: var(--surface-color);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--surface-border);
+            border-radius: 12px;
+            padding: 2.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .glass-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 50%;
+            height: 100%;
+            background: linear-gradient(to right, transparent, rgba(255,255,255,0.03), transparent);
+            transform: skewX(-20deg);
+            transition: 0.7s;
+        }
+
+        .glass-card:hover::before {
+            left: 150%;
+        }
+
+        .glass-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4);
+            border-color: rgba(255, 75, 75, 0.3);
+        }
+
+        .card-title {
+            font-family: var(--font-typewriter);
+            font-size: 1.8rem;
+            margin-bottom: 1.5rem;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .card-title::before {
+            content: '>';
+            color: var(--accent);
+            font-weight: bold;
+        }
+
+        /* Grid layout for features */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .feature-item {
+            padding: 1.5rem;
+            border-left: 2px solid var(--surface-border);
+            transition: all 0.3s ease;
+        }
+
+        .feature-item:hover {
+            border-left-color: var(--accent);
+            background: rgba(255,255,255,0.02);
+        }
+
+        .feature-item h3 {
+            font-family: var(--font-typewriter);
+            color: #fff;
+            margin-bottom: 0.5rem;
+            font-size: 1.2rem;
+        }
+
+        .feature-item p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        /* Interactive terminal */
+        .terminal {
+            background: rgba(10, 10, 10, 0.8);
+            border-radius: 8px;
+            border: 1px solid #333;
+            padding: 1.5rem;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            color: #00ff00;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+            position: relative;
+        }
+
+        .terminal-header {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #333;
+        }
+
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .dot-red { background: #ff5f56; }
+        .dot-yellow { background: #ffbd2e; }
+        .dot-green { background: #27c93f; }
+
+        .terminal-body {
+            min-height: 150px;
+        }
+
+        .cmd-line {
+            display: flex;
+            margin-bottom: 0.5rem;
+        }
+
+        .cmd-prompt {
+            color: var(--accent);
+            margin-right: 1rem;
+            user-select: none;
+        }
+
+        .cmd-input {
+            color: #fff;
+        }
+
+        .cmd-output {
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+            padding-left: 1rem;
+            border-left: 1px dashed #333;
+        }
+
+        /* Interactive playground */
+        .playground {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 1rem;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--surface-border);
+            padding: 1rem;
+            border-radius: 6px;
+            color: #fff;
+            font-family: var(--font-mono);
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 10px rgba(255, 75, 75, 0.2);
+        }
+
+        button {
+            background: transparent;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 1rem 2rem;
+            border-radius: 6px;
+            font-family: var(--font-typewriter);
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        button:hover {
+            background: var(--accent);
+            color: #000;
+            box-shadow: 0 0 15px rgba(255, 75, 75, 0.4);
+        }
+
+        .matrix-output {
+            margin-top: 1rem;
+            font-size: 0.8rem;
+            word-break: break-all;
+            color: var(--text-secondary);
+            min-height: 100px;
+            background: rgba(0,0,0,0.2);
+            padding: 1rem;
+            border-radius: 6px;
+        }
+        
+        .matrix-char {
+            display: inline-block;
+            width: 1ch;
+            text-align: center;
+        }
+
+        /* Animations */
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes matrixFade {
+            0% { opacity: 0; color: #fff; }
+            50% { color: var(--accent); }
+            100% { opacity: 1; color: var(--text-secondary); }
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            margin-top: 4rem;
+            padding-top: 2rem;
+            border-top: 1px dashed var(--surface-border);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+        
+        footer a:hover {
+            color: #fff;
+            text-shadow: 0 0 8px rgba(255,255,255,0.5);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .typewriter h1 { font-size: 2.5rem; }
+            .input-group { flex-direction: column; }
+            .glass-card { padding: 1.5rem; }
+        }
     </style>
 </head>
 <body>
-    <div class="hero-box">
-        <h1>stenograph</h1>
-        <div class="tag">CIPHER & STEGANOGRAPHY TOOLKIT</div>
-        <p class="desc">Cryptographic data hiding and steganography analysis.</p>
-        <div class="btn-group">
-            <a href="https://github.com/Jirnyak/stenograph" class="btn" target="_blank">🚀 Open GitHub Repo</a>
-            <a href="https://github.com/Jirnyak/stenograph#readme" class="btn btn-sec" target="_blank">📖 Read Spec</a>
-        </div>
+    <div class="container">
+        <header>
+            <div class="typewriter">
+                <h1>STENOGRAPH</h1>
+            </div>
+            <p>Everything is an image. Images are matrices. Matrices multiply.</p>
+        </header>
+
+        <section class="glass-card">
+            <h2 class="card-title">System Architecture</h2>
+            <p style="margin-bottom: 2rem;">Stenograph is a high-throughput steganography and image-cipher playground. It encodes text, audio, and images into 1024x1024 PNG matrices, applies visual keys, and enforces zero-allocation runtime performance.</p>
+            
+            <div class="features-grid">
+                <div class="feature-item">
+                    <h3>Visual Ciphers</h3>
+                    <p>Image x Key → Transformed Image. Utilizes separate visual key images for true cryptographic isolation.</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Data Imprinting</h3>
+                    <p>Text → Image → Text. Incorporates redundant pixel voting and CRC checks for data integrity.</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Acoustic Embedding</h3>
+                    <p>Audio → Image → Audio. Features PCM exact byte storage and Fourier robust sonogram generation.</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Deep Stash</h3>
+                    <p>Image → Cover Image → Image. Utilizes low-bit image-in-image storage for covert payload delivery.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="glass-card">
+            <h2 class="card-title">Live Decoder Interface</h2>
+            <div class="playground">
+                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">Enter a string to visualize its matrix steganographic representation.</p>
+                <div class="input-group">
+                    <input type="text" id="encode-input" placeholder="Initiate sequence..." autocomplete="off">
+                    <button id="encode-btn">Encode</button>
+                </div>
+                <div class="matrix-output" id="matrix-output">
+                    <!-- Matrix output will appear here -->
+                </div>
+            </div>
+        </section>
+
+        <section class="glass-card">
+            <h2 class="card-title">CLI Telemetry</h2>
+            <div class="terminal">
+                <div class="terminal-header">
+                    <div class="terminal-dot dot-red"></div>
+                    <div class="terminal-dot dot-yellow"></div>
+                    <div class="terminal-dot dot-green"></div>
+                </div>
+                <div class="terminal-body" id="term-body">
+                    <div class="cmd-line">
+                        <span class="cmd-prompt">admin@sys:~$</span>
+                        <span class="cmd-input type-anim1">python steno.py keygen</span>
+                    </div>
+                    <div class="cmd-output out-anim1" style="display:none;">
+                        [OK] Generated 1024x1024 key array<br>
+                        [OK] Saved to key.png
+                    </div>
+                    <div class="cmd-line" style="display:none;" id="cmd2">
+                        <span class="cmd-prompt">admin@sys:~$</span>
+                        <span class="cmd-input type-anim2">python steno.py encrypt image.png output.png</span>
+                    </div>
+                    <div class="cmd-output out-anim2" style="display:none;">
+                        [>>] Loading image.png...<br>
+                        [>>] Applying matrix transformation...<br>
+                        [OK] Cipher complete. Saved output.png
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>Distributed under the True People's License v2.0</p>
+            <p style="margin-top: 0.5rem;">
+                <a href="https://github.com/Jirnyak/stenograph" target="_blank">View Repository</a> &nbsp;|&nbsp; 
+                <a href="stenograph-web/dist/index.html">Launch Web App</a>
+            </p>
+        </footer>
     </div>
+
+    <script>
+        // Interactive Matrix Encoding
+        const encodeBtn = document.getElementById('encode-btn');
+        const encodeInput = document.getElementById('encode-input');
+        const matrixOutput = document.getElementById('matrix-output');
+
+        function textToMatrix(text) {
+            let result = '';
+            for(let i=0; i<text.length; i++) {
+                const binary = text.charCodeAt(i).toString(2).padStart(8, '0');
+                for(let j=0; j<binary.length; j++) {
+                    const char = binary[j] === '1' ? '▓' : '░';
+                    result += `<span class="matrix-char" style="animation: matrixFade 0.5s ease forwards; animation-delay: ${(i*8+j)*10}ms; opacity:0;">${char}</span>`;
+                }
+                result += ' ';
+            }
+            return result;
+        }
+
+        encodeBtn.addEventListener('click', () => {
+            const text = encodeInput.value || 'STENOGRAPH';
+            matrixOutput.innerHTML = ''; // clear
+            
+            // Generate matrix representation
+            setTimeout(() => {
+                matrixOutput.innerHTML = textToMatrix(text);
+            }, 100);
+        });
+        
+        encodeInput.addEventListener('keypress', (e) => {
+            if(e.key === 'Enter') encodeBtn.click();
+        });
+
+        // Initial encode
+        encodeInput.value = 'STENOGRAPH';
+        encodeBtn.click();
+        encodeInput.value = '';
+
+        // Terminal Animation
+        setTimeout(() => {
+            document.querySelector('.out-anim1').style.display = 'block';
+            setTimeout(() => {
+                const cmd2 = document.getElementById('cmd2');
+                cmd2.style.display = 'flex';
+                let text = cmd2.querySelector('.cmd-input').innerText;
+                cmd2.querySelector('.cmd-input').innerText = '';
+                
+                let i = 0;
+                let typeInterval = setInterval(() => {
+                    cmd2.querySelector('.cmd-input').innerText += text.charAt(i);
+                    i++;
+                    if(i >= text.length) {
+                        clearInterval(typeInterval);
+                        setTimeout(() => {
+                            document.querySelector('.out-anim2').style.display = 'block';
+                        }, 400);
+                    }
+                }, 50);
+                
+            }, 1000);
+        }, 1500);
+    </script>
 </body>
 </html>
