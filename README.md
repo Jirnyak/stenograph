@@ -1,95 +1,72 @@
-# Stenograph
+<div align="center">
 
-Everything is an image. Images are matrices. Matrices multiply.
+# 🔐 STENOGRAPH — Image Cipher & Steganography Playground
 
-Stenograph is a small steganography and image-cipher playground. It turns text,
-audio, and images into 1024x1024 PNGs, transforms images with visual keys, and
-can recover useful output from those images without PNG metadata.
+[![Language](https://img.shields.io/badge/JavaScript%20%2F%20Python-Vite-yellow?style=for-the-badge&logo=javascript)]()
+[![Category](https://img.shields.io/badge/Category-Steganography%20%2F%20Cryptography-purple?style=for-the-badge)]()
+[![License](https://img.shields.io/badge/License-Open-brightgreen?style=for-the-badge)](LICENSE.md)
+[![Stars](https://img.shields.io/github/stars/Jirnyak/stenograph?style=for-the-badge&color=gold)]()
 
-## What It Does
+> **Everything is an image. Images are matrices. Matrices multiply. — A steganography and image-cipher playground that encodes text, audio, and images into 1024×1024 PNGs using visual keys.**
 
-- Image x key -> transformed image, using a separate visual key image.
-- Text -> image -> text, with redundant pixel voting and CRC checks.
-- Audio -> image -> audio in two browser modes:
-  - `PCM exact`: stores 16-bit PCM bytes for PNG-only round trips.
-  - `Fourier robust`: stores a frequency image with phase vectors. The red
-    channel is the drawable frequency map; green/blue preserve phase for audible
-    round trips. A 0..500s span slider computes the Fourier grid; its Auto tick
-    follows the loaded audio duration, capped at 500s. Longer spans trade sample
-    rate and time resolution for duration. Tracks longer than the selected span
-    are fitted into it and expanded back.
-- Image -> cover image -> image, using low-bit image-in-image storage.
-- Photo extract: finds a photographed Stenograph square and rectifies it back to
-  1024x1024.
+[▶️ Demo](#) &nbsp;·&nbsp; [📐 Architecture](architecture.md) &nbsp;·&nbsp; [🐛 Issues](../../issues)
 
-## Web App
+</div>
 
-The deployable app lives in `stenograph-web/`.
+---
 
-```bash
-cd stenograph-web
-npm install
-npm run dev
-npm run build
-```
+## 📖 About
 
-The production output is `stenograph-web/dist/`.
+**STENOGRAPH** treats all data as images and all transformations as matrix operations. Text, audio, and images can be encoded into 1024×1024 PNGs, transformed using visual key images, and recovered from the outputs — without relying on PNG metadata.
 
-## Cloudflare Worker
+The project is a research playground for steganography, visual cryptography, and Fourier-space image coding.
 
-Live Worker URL:
+---
 
-```text
-https://stenograph.bileter.workers.dev
-```
+## ✨ Features
 
-Deploy the built Vite app as Worker static assets:
+| Feature | Description |
+|---|---|
+| 🔑 **Visual Key Transform** | `image × key → transformed image` using a separate visual key image |
+| 📝 **Text → Image → Text** | Redundant pixel voting and CRC checks for reliable text recovery |
+| 🎵 **Audio Round-Trips** | Two modes: `PCM exact` (16-bit bytes in PNG) and `Fourier robust` (frequency image with phase vectors) |
+| 🌊 **Fourier Grid** | Red channel = drawable frequency map; green/blue = phase for audible recovery |
+| 🔍 **Hack Tools** | Pattern analysis, dithering experiments, Hadamard transforms |
+| 🤖 **Telegram Bot** | Automation interface for encoding/decoding via Telegram |
+
+---
+
+## 🔨 Getting Started
 
 ```bash
-cd stenograph-web
-npm run deploy:worker
+git clone https://github.com/Jirnyak/stenograph.git
+cd stenograph
+
+# Web interface (Vite)
+npm install && npm run dev
+
+# Python tools
+pip install pillow numpy scipy
+python cipher.py
 ```
 
-This runs `npm run build` and then publishes `stenograph-web/dist/` to the
-Cloudflare Worker named `stenograph`.
+---
 
-## Cloudflare Pages
+## 📐 Architecture
 
-If using Pages instead of the Worker URL above, use these Pages settings:
+See [architecture.md](architecture.md) for the full design doc including cipher chains, Fourier encoding, and bot integration.
 
-- Build command: `npm run build`
-- Build output directory: `dist`
-- Root directory: `stenograph-web`
-- Production branch: `main`
+---
 
-Pushing to GitHub `main` should trigger the Cloudflare Pages build if the
-project is connected to `Jirnyak/stenograph`.
+## 📜 License
 
-## Python CLI
+**Open License** — Jirnyak. See [LICENSE.md](LICENSE.md).
 
-`steno.py` is the main CLI implementation.
+---
 
-```bash
-python steno.py keygen
-python steno.py encrypt image.png output.png
-python steno.py decrypt image.png output.png
-python steno.py text2img "hello" text.png
-python steno.py img2text text.png
-python steno.py audio2img music.wav spectrum.png
-python steno.py img2audio spectrum.png recovered.wav
-python steno.py hideimg cover.png secret.png hidden.png 4
-python steno.py revealimg hidden.png revealed.png auto
-```
+<details>
+<summary>🇷🇺 Русская Версия</summary>
 
-Several root-level Python files are older experiments and prototypes. The
-current architecture is documented in `architecture.md`.
+**STENOGRAPH** — площадка для экспериментов со стеганографией и визуальной криптографией. Всё — изображение, изображения — матрицы, матрицы перемножаются. Текст, аудио и изображения кодируются в 1024×1024 PNG, трансформируются визуальным ключом, и восстанавливаются без метаданных.
 
-## Format Rules
-
-- Output files are normal images; payload facts live in pixels, not PNG metadata.
-- Keys are separate files and are not embedded in encrypted output.
-- Keep PNG for exact byte/image-in-image modes.
-- Use `Fourier robust` when the image should survive compression or be edited as
-  a frequency drawing. Use a longer Fourier span for full songs; the image
-  stores its computed grid in pixels. Use `PCM exact` when PNG-only audio
-  recovery matters more than editable image behavior.
+</details>
