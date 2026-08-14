@@ -250,6 +250,78 @@ See [architecture.md](architecture.md) for the full design doc including cipher 
 
 ---
 
+
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/marko1olo/gigahrush/main/docs/stenograph_audio.jpg" width="100%" alt="Stenograph Soviet Acoustic Intelligence & Audio Steganography"/>
+
+</div>
+
+---
+
+## 🎙️ Acoustic Formant Extraction, Steganography & Phonetic DSP
+
+Stenograph performs real-time audio phoneme segmentation, hidden frequency watermark extraction, and acoustic surveillance signal deinterlacing:
+
+```mermaid
+graph LR
+    A[Raw Audio PCM Stream: 48kHz 24-bit] --> B[Blackman-Harris Windowing & Short-Time FFT]
+    B --> C[Phonetic Formant Filter: F1 300-800Hz, F2 1000-2500Hz]
+    B --> D[Ultrasonic Carrier Stego-Detector 18kHz-22kHz]
+    C --> E[Dynamic Time Warping Phoneme Sequence Matcher]
+    D --> F[Phase Modulation Demodulator & Bitstream Decoder]
+    E & F --> G[Decrypted Transcript & Audio Forensic Timeline]
+```
+
+### ⚡ 1. Audio Watermark Inaudible Carrier Extractor (C++ / Python)
+
+Demodulates high-frequency Phase Shift Keying (PSK) data embedded above $19.5	ext{ kHz}$:
+
+```python
+import numpy as np
+
+def extract_ultrasonic_watermark(pcm_data: np.ndarray, sample_rate: int = 48000, carrier_freq: float = 20000.0) -> bytes:
+    # 1. Complex Heterodyne downconversion
+    t = np.arange(len(pcm_data)) / sample_rate
+    carrier = np.exp(-2j * np.pi * carrier_freq * t)
+    baseband = pcm_data * carrier
+    
+    # 2. Lowpass Butterworth filter (cutoff 1kHz)
+    fft_vals = np.fft.rfft(baseband)
+    freqs = np.fft.rfftfreq(len(baseband), 1.0 / sample_rate)
+    fft_vals[freqs > 1000] = 0
+    filtered_baseband = np.fft.irfft(fft_vals, n=len(baseband))
+    
+    # 3. Differential Phase Slicing
+    phases = np.unwrap(np.angle(filtered_baseband))
+    samples_per_bit = sample_rate // 100 # 100 bps
+    bits = []
+    
+    for i in range(0, len(phases) - samples_per_bit, samples_per_bit):
+        delta_phase = phases[i + samples_per_bit] - phases[i]
+        bits.append(1 if delta_phase > 0 else 0)
+        
+    # Pack bits into bytes
+    byte_arr = bytearray()
+    for b in range(0, len(bits) - 7, 8):
+        byte_val = 0
+        for bit_idx in range(8):
+            byte_val = (byte_val << 1) | bits[b + bit_idx]
+        byte_arr.append(byte_val)
+        
+    return bytes(byte_arr)
+```
+
+---
+
+### 🎚️ 2. Soviet KGB Audio Filter Standards
+
+| Acoustic Filter Mode | Frequency Range | Attenuation Curve | Primary Target |
+| :--- | :--- | :--- | :--- |
+| **Речь (Speech Formants)** | $300	ext{ Hz} - 3.4	ext{ kHz}$ | $-48	ext{ dB/octave}$ bandpass | Telephone wiretap clarity & background hiss elimination |
+| **Стегано (Carrier)** | $18.5	ext{ kHz} - 22.0	ext{ kHz}$ | $+24	ext{ dB}$ resonance peak | Covert cryptographic token extraction |
+| **Сейсмо (Vibration)** | $5	ext{ Hz} - 80	ext{ Hz}$ | Sub-bass lowpass | Room reverberation & structural footsteps detection |
+
 ## 📜 License & Maintainer Standards
 
 Distributed under the **True People's License v2.0** / Open License — Authors: **Jirnyak** & **Adolf Petushkov** (2026). Zero paywalls, zero privatization. Maintainers, contributors, and security auditors are welcome!
