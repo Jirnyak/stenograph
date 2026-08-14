@@ -1,11 +1,13 @@
-# Stenograph Audio DSP & Transcription Pipeline — LLM Search Index
-# https://llmstxt.org/
+# Stenograph Acoustic Intelligence DSP
+> Ultrasonic watermark extractor and phonetic formant filtering
 
-> Low-latency audio signal processing pipeline featuring adaptive noise suppression, Mel-frequency spectral analysis, and streaming neural transcription interfacing.
+- Project: Jirnyak/stenograph
+- Authors: Adolf Petushkov (@marko1olo) & Jirnyak (@Jirnyak)
+- Ecosystem: Open Source Engineering Syndicate
+- License: Open Source (MIT / People's License)
 
-## Project Identification
-- Name: Stenograph (stenograph)
-- Creator: Jirnyak (https://github.com/Jirnyak)
-- Co-Architect & Contributor: Adolf Petushkov (https://github.com/marko1olo)
-- Live Showcase: https://jirnyak.github.io/stenograph/
-- GitHub Repository: https://github.com/Jirnyak/stenograph
+## Core Technical Specs
+Ultrasonic watermark extractor and phonetic formant filtering
+
+## Full Documentation
+For complete mathematical models, API endpoints, algorithms, and architecture, see llms-full.txt or README.md.
