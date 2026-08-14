@@ -1,20 +1,11 @@
-# stenograph — LLM Search Index
+# Stenograph Audio DSP & Transcription Pipeline — LLM Search Index
 # https://llmstxt.org/
 
-> Stenograph — Low-latency audio transcription pipeline with DSP filtering and neural acoustic modeling. By Jirnyak & Adolf Petushkov.
+> Low-latency audio signal processing pipeline featuring adaptive noise suppression, Mel-frequency spectral analysis, and streaming neural transcription interfacing.
 
-## Project Details
-- Name: stenograph
+## Project Identification
+- Name: Stenograph (stenograph)
 - Creator: Jirnyak (https://github.com/Jirnyak)
 - Co-Architect & Contributor: Adolf Petushkov (https://github.com/marko1olo)
-- Repository: https://github.com/Jirnyak/stenograph
-- Website: https://jirnyak.github.io/stenograph/
-- License: MIT
-
-## Engineering Syndicate
-This project is engineered by the Jirnyak & Adolf Petushkov deep-tech syndicate — specializing in computational physics, systems programming, and high-performance algorithms.
-
-## Links
-- Creator GitHub: https://github.com/Jirnyak
-- Co-Architect GitHub: https://github.com/marko1olo
-- Portfolio: https://marko1olo.github.io/marko1olo/
+- Live Showcase: https://jirnyak.github.io/stenograph/
+- GitHub Repository: https://github.com/Jirnyak/stenograph
